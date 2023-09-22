@@ -9,19 +9,18 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <string.h>
 
-struct child_process {
-    uint8_t local_id;
-    pid_t pid;
+int pipe_log_file;
+
+enum pipe_log_type {
+    OPENED = 0,
+    CLOSED_READ,
+    CLOSED_WRITE
 };
 
-struct parent_process {
-    uint8_t local_id;
-    pid_t pid;
-    struct child_process* children;  //указатель на начало массива
-};
-
-int get_process_id();
 int start_parent(long children_num);
+void write_pipe_log(int first, int second, int my_local_id, enum pipe_log_type type);
 
 #endif //LAB1_PROCESS_H
