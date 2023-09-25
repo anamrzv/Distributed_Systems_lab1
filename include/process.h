@@ -11,8 +11,14 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
+#include <time.h>
+#include "ipc.h"
+#include "pa1.h"
+
 
 int pipe_log_file;
+int events_log_file;
+timestamp_t my_current_timestamp;
 
 enum pipe_log_type {
     OPENED = 0,
@@ -20,7 +26,14 @@ enum pipe_log_type {
     CLOSED_WRITE
 };
 
+struct msg_source {
+    int id;
+    int* write_ends;
+    long processes_num;
+};
+
 int start_parent(long children_num);
 void write_pipe_log(int first, int second, int my_local_id, enum pipe_log_type type);
+void write_events_log(const char* message, int message_len);
 
 #endif //LAB1_PROCESS_H
