@@ -66,14 +66,16 @@ int start_parent(long children_num) {
     for (int i = 1; i < processes_num; i++) {
         pid_t child_pid = fork();
         my_current_timestamp++;
-        printf("%d | Child process %d is forked", my_current_timestamp, i);
         if (child_pid == -1) {
             printf("fork() failed for process number %d\n", i + 1); // todo: close pipes
             return -1;
+        } else if (child_pid > 0) {
+            printf("%" PRId16 " | Child process %d is forked\n", my_current_timestamp, i);
         } else if (child_pid == 0) { // we are in child process
             //leave only its ends
+            my_current_timestamp = 0;
             int current_child_num = i;
-            my_local_id = current_child_num;
+            my_local_id = i;
             for (int from = 0; from < processes_num; from++) {
                 for (int to = 0; to < processes_num; to++) {
                     if (from == to) continue;
@@ -91,7 +93,7 @@ int start_parent(long children_num) {
                 }
             }
 
-            //todo: send start
+            //send start
             my_current_timestamp++;
             Message* start_msg = malloc(sizeof (Message));
             start_msg->s_header.s_magic = MESSAGE_MAGIC;
@@ -103,30 +105,53 @@ int start_parent(long children_num) {
 
             struct msg_source src = {my_local_id, pipe_write_ends[my_local_id], processes_num };
             send_multicast(&src, start_msg);
+            free(start_msg);
 
             //todo: wait for all
 
+
             //todo: send end
-            break;
+            return 0;
         }
     }
 
+    if (my_local_id == PARENT_ID) {
+        int p = -1;
+        wait(&p);
+    }
+
+    //todo: wait for children
 
     return 0;
 }
 
 int send_multicast(void* void_source, const Message* msg) {
     struct msg_source* source = (struct msg_source*) void_source;
+    write_events_log(msg->s_payload, msg->s_header.s_payload_len);
+    printf("%" PRId16 " | (send_multicast) | %s\n", my_current_timestamp, msg->s_payload);
     for (int i = 0; i < source->processes_num; i++) {
-        write_events_log(msg->s_payload, msg->s_header.s_payload_len);
-        write(source->write_ends[i], msg, sizeof(Message));
+//        write(source->write_ends[i], msg, sizeof(Message));
+//        close(source->write_ends[i]); //todo: move to separate func
     }
-    return 0;
+    return 0; //todo: add error code
 }
 
-int send(void* self, local_id dst, const Message* msg) {
+int receive_any(void * void_dest, Message * msg) {
+    struct msg_source* dest = (struct msg_source*) void_dest;
 
-    return 0;
+//    for (int i = 0; i < source->processes_num; i++) {
+//        write(source->write_ends[i], msg, sizeof(Message));
+//        close(source->write_ends[i]); //todo: move to separate func
+//    }
+    return 0; //todo: add error code
+}
+
+int send(void* void_source, local_id dst, const Message* msg) {
+    struct msg_source* source = (struct msg_source*) void_source;
+    write_events_log(msg->s_payload, msg->s_header.s_payload_len);
+    printf("%" PRId16 " | %s", my_current_timestamp, msg->s_payload);
+    write(source->write_ends[dst], msg, sizeof(Message));
+    return 0; //todo: add error code
 }
 
 int calc_timestamp(int external_timestamp, int internal_counter) {
@@ -142,7 +167,7 @@ void write_events_log(const char* message, int message_len) {
 }
 
 void write_pipe_log(int first, int second, int my_local_id, enum pipe_log_type type) {
-    char message[70];
+    char message[100];
     if (type == OPENED)
         snprintf(message, sizeof(message), "%d | Process %d: Pipe between processes with local ids %d and %d was OPENED\n",
                  my_current_timestamp,
