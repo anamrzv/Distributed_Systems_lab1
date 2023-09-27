@@ -53,20 +53,6 @@ int start_parent(long children_num) {
         }
     }
 
-    //
-//    my_current_timestamp++;
-//    Message* declaration = malloc(sizeof (Message));
-//    declaration->s_header.s_magic = MESSAGE_MAGIC;
-//    declaration->s_header.s_type = STARTED;
-//    declaration->s_header.s_local_time = my_current_timestamp;
-//    int length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_started_fmt,
-//                          my_local_id, getpid(), getppid());
-//    declaration->s_header.s_payload_len = length;
-//
-//    struct msg_source src = {my_local_id, pipe_write_ends[my_local_id], processes_num };
-//    send_multicast(&src, declaration);
-    //
-
     for (int i = 1; i < processes_num; i++) {
         pid_t child_pid = fork();
         my_current_timestamp++;
@@ -140,8 +126,11 @@ int start_parent(long children_num) {
             }
         }
 
-        int p = -1;
-        wait(&p);
+        //todo: wait for all
+        Message* answer = malloc(sizeof (Message));
+        struct msg_destination dst = {my_local_id, pipe_read_ends[my_local_id], processes_num };
+        receive_any(&dst, answer);
+
     }
 
     //todo: wait for children
