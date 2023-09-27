@@ -12,9 +12,12 @@
 #include <fcntl.h>
 #include <string.h>
 #include <time.h>
+#include <fcntl.h>
+#include <errno.h>
 #include "ipc.h"
 #include "pa1.h"
 
+#define PROCESS_NUM 10
 
 int pipe_log_file;
 int events_log_file;
@@ -29,6 +32,12 @@ enum pipe_log_type {
 struct msg_source {
     int id;
     int* write_ends;
+    long processes_num;
+};
+
+struct msg_destination {
+    int id;
+    int* read_ends;
     long processes_num;
 };
 

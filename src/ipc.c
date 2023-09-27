@@ -25,8 +25,9 @@ int start_parent(long children_num) {
     int my_local_id = PARENT_ID;
     my_current_timestamp = 0;
 
-    int pipe_write_ends[processes_num][processes_num];
-    int pipe_read_ends[processes_num][processes_num];
+    int pipe_write_ends[PROCESS_NUM][PROCESS_NUM] = {0};
+    int pipe_read_ends[PROCESS_NUM][PROCESS_NUM] = {0};
+
     int fd[2]; // todo: check position
 
     // open all pipes
@@ -40,28 +41,31 @@ int start_parent(long children_num) {
                 my_current_timestamp++;
                 write_pipe_log(from, to, PARENT_ID, OPENED);
 
-                pipe_read_ends[from][to] = fd[0];
+                if (fcntl(fd[0], F_SETFL, O_NONBLOCK) < 0) {
+                    perror("fcntl");
+                }
+                pipe_read_ends[to][from] = fd[0];
                 pipe_write_ends[from][to] = fd[1];
+            } else {
+                pipe_read_ends[to][from] = -999;
+                pipe_write_ends[from][to] = -999;
             }
         }
     }
 
-    for (int from = 0; from < processes_num; from++) {
-        for (int to = 0; to < processes_num; to++) {
-            if (from == to) continue;
-
-            if (from != 0) {
-                close(pipe_write_ends[from][to]);
-                my_current_timestamp++;
-                write_pipe_log(from, to, my_local_id, CLOSED_WRITE);
-            }
-            if (to != 0) {
-                close(pipe_read_ends[from][to]);
-                my_current_timestamp++;
-                write_pipe_log(from, to, my_local_id, CLOSED_READ);
-            }
-        }
-    }
+    //
+//    my_current_timestamp++;
+//    Message* declaration = malloc(sizeof (Message));
+//    declaration->s_header.s_magic = MESSAGE_MAGIC;
+//    declaration->s_header.s_type = STARTED;
+//    declaration->s_header.s_local_time = my_current_timestamp;
+//    int length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_started_fmt,
+//                          my_local_id, getpid(), getppid());
+//    declaration->s_header.s_payload_len = length;
+//
+//    struct msg_source src = {my_local_id, pipe_write_ends[my_local_id], processes_num };
+//    send_multicast(&src, declaration);
+    //
 
     for (int i = 1; i < processes_num; i++) {
         pid_t child_pid = fork();
@@ -84,8 +88,7 @@ int start_parent(long children_num) {
                         close(pipe_write_ends[from][to]);
                         my_current_timestamp++;
                         write_pipe_log(from, to, my_local_id, CLOSED_WRITE);
-                    }
-                    if (to != current_child_num) {
+
                         close(pipe_read_ends[from][to]);
                         my_current_timestamp++;
                         write_pipe_log(from, to, my_local_id, CLOSED_READ);
@@ -95,20 +98,25 @@ int start_parent(long children_num) {
 
             //send start
             my_current_timestamp++;
-            Message* start_msg = malloc(sizeof (Message));
-            start_msg->s_header.s_magic = MESSAGE_MAGIC;
-            start_msg->s_header.s_type = STARTED;
-            start_msg->s_header.s_local_time = my_current_timestamp;
-            int length = snprintf(start_msg->s_payload, MAX_PAYLOAD_LEN, log_started_fmt,
-                     my_local_id, getpid(), getppid());
-            start_msg->s_header.s_payload_len = length;
+            Message* declaration = malloc(sizeof (Message));
+            declaration->s_header.s_magic = MESSAGE_MAGIC;
+            declaration->s_header.s_type = STARTED;
+            declaration->s_header.s_local_time = my_current_timestamp;
+            int length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_started_fmt,
+                                  my_local_id, getpid(), getppid());
+            declaration->s_header.s_payload_len = length;
 
             struct msg_source src = {my_local_id, pipe_write_ends[my_local_id], processes_num };
-            send_multicast(&src, start_msg);
-            free(start_msg);
+            send_multicast(&src, declaration);
+
 
             //todo: wait for all
+            Message* answer = malloc(sizeof (Message));
+            struct msg_destination dst = {my_local_id, pipe_read_ends[my_local_id], processes_num };
+            receive_any(&dst, answer);
 
+            free(answer);
+            free(declaration);
 
             //todo: send end
             return 0;
@@ -116,6 +124,22 @@ int start_parent(long children_num) {
     }
 
     if (my_local_id == PARENT_ID) {
+        for (int from = 0; from < processes_num; from++) {
+            for (int to = 0; to < processes_num; to++) {
+                if (from == to) continue;
+
+                if (from != 0) {
+                    close(pipe_write_ends[from][to]);
+                    my_current_timestamp++;
+                    write_pipe_log(from, to, my_local_id, CLOSED_WRITE);
+
+                    close(pipe_read_ends[from][to]);
+                    my_current_timestamp++;
+                    write_pipe_log(from, to, my_local_id, CLOSED_READ);
+                }
+            }
+        }
+
         int p = -1;
         wait(&p);
     }
@@ -128,22 +152,46 @@ int start_parent(long children_num) {
 int send_multicast(void* void_source, const Message* msg) {
     struct msg_source* source = (struct msg_source*) void_source;
     write_events_log(msg->s_payload, msg->s_header.s_payload_len);
-    printf("%" PRId16 " | (send_multicast) | %s\n", my_current_timestamp, msg->s_payload);
     for (int i = 0; i < source->processes_num; i++) {
-//        write(source->write_ends[i], msg, sizeof(Message));
-//        close(source->write_ends[i]); //todo: move to separate func
+        if (i == source->id) continue;
+        ssize_t a = write(source->write_ends[i], msg, sizeof(Message));
+        if (a < 0) perror("write");
+        else printf("%" PRId16 " | (send_multicast) to %d success | %s\n", my_current_timestamp, i, msg->s_payload);
+        close(source->write_ends[i]); //todo: move to separate func
     }
     return 0; //todo: add error code
 }
 
-int receive_any(void * void_dest, Message * msg) {
-    struct msg_source* dest = (struct msg_source*) void_dest;
-
-//    for (int i = 0; i < source->processes_num; i++) {
-//        write(source->write_ends[i], msg, sizeof(Message));
-//        close(source->write_ends[i]); //todo: move to separate func
-//    }
-    return 0; //todo: add error code
+int receive_any(void* void_dest, Message* msg) {
+    struct msg_destination* dest = (struct msg_destination*) void_dest;
+    int received_declarations = 0;
+    long waited_processes_num = dest->processes_num - 2;
+    while (received_declarations != waited_processes_num) {
+        for (int waited_proc_id = 1; waited_proc_id < dest->processes_num; waited_proc_id++) {
+            if (waited_proc_id == dest->id) continue;
+            if (fcntl(dest->read_ends[waited_proc_id], F_GETFD) < 0) continue;
+            long read_result = read(dest->read_ends[waited_proc_id], msg, sizeof(Message));
+            switch (read_result) {
+                case -1: // case -1 means pipe is empty and errno = EAGAIN
+                    if (errno == EAGAIN) {
+                        printf("%d tries to receive: pipe from process %d is empty\n", dest->id, waited_proc_id);
+                        sleep(1);
+                        break;
+                    } else {
+                        perror("read");
+                        exit(4);
+                    }
+                case 0: // case 0 means all bytes are read and EOF
+                    printf("%d tries to receive: End of conversation with %d\n", dest->id, waited_proc_id);
+                    close(dest->read_ends[waited_proc_id]);
+                    received_declarations++;
+                    break;
+                default:
+                    printf("%d received MSG = %s\n", dest->id, msg->s_payload);
+            }
+        }
+    }
+    return 0;
 }
 
 int send(void* void_source, local_id dst, const Message* msg) {
