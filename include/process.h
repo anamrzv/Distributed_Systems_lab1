@@ -18,6 +18,7 @@
 #include "pa1.h"
 
 #define PROCESS_NUM 10
+#define NOT_EXIST (-999)
 
 int pipe_log_file;
 int events_log_file;
@@ -42,7 +43,9 @@ struct msg_destination {
 };
 
 int start_parent(long children_num);
+int wait_for_messages_from_everybody(void* void_dest, MessageType supposed_type);
 void write_pipe_log(int first, int second, int my_local_id, enum pipe_log_type type);
 void write_events_log(const char* message, int message_len);
+
 
 #endif //LAB1_PROCESS_H
