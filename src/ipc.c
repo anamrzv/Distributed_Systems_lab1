@@ -2,11 +2,7 @@
 // Created by Ana Mun on 17.09.2023.
 //
 
-
-#include "include/ipc.h"
 #include "include/process.h"
-#include "include/common.h"
-
 
 int start_parent(long children_num) {
     pipe_log_file = open(pipes_log, O_WRONLY | O_APPEND | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
@@ -39,7 +35,7 @@ int start_parent(long children_num) {
                     return -1;
                 }
                 my_current_timestamp++;
-                write_pipe_log(from, to, PARENT_ID, OPENED);
+                write_pipe_log_open(from, to, fd[0], fd[1]);
 
                 if (fcntl(fd[0], F_SETFL, O_NONBLOCK) < 0) {
                     perror("fcntl");
@@ -59,78 +55,115 @@ int start_parent(long children_num) {
         if (child_pid == -1) {
             printf("fork() failed for process number %d\n", i + 1); // todo: close pipes
             return -1;
-        } else if (child_pid > 0) {
-            printf("%" PRId16 " | Child process %d is forked\n", my_current_timestamp, i);
         } else if (child_pid == 0) { // we are in child process
-            //leave only its ends
             my_current_timestamp = 0;
-            int current_child_num = i;
             my_local_id = i;
+
+            char buf[80];
+            int length = snprintf(buf, 80, log_started_fmt, my_local_id, getpid(), getppid());
+            write_events_log(buf, length);
+            printf("%s", buf);
+
+            //leave only its ends
             for (int from = 0; from < processes_num; from++) {
                 for (int to = 0; to < processes_num; to++) {
                     if (from == to) continue;
 
-                    if (from != current_child_num) {
+                    if (from != my_local_id) {
                         close(pipe_write_ends[from][to]);
                         my_current_timestamp++;
-                        write_pipe_log(from, to, my_local_id, CLOSED_WRITE);
+                        write_pipe_log_close(from, to, pipe_write_ends[from][to], CLOSED_WRITE);
 
                         close(pipe_read_ends[from][to]);
                         my_current_timestamp++;
-                        write_pipe_log(from, to, my_local_id, CLOSED_READ);
+                        write_pipe_log_close(from, to, pipe_read_ends[from][to], CLOSED_READ);
                     }
                 }
             }
 
             //send start
-            my_current_timestamp++;
             Message* declaration = malloc(sizeof (Message));
             declaration->s_header.s_magic = MESSAGE_MAGIC;
             declaration->s_header.s_type = STARTED;
             declaration->s_header.s_local_time = my_current_timestamp;
-            int length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_started_fmt,
+            length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_started_fmt,
                                   my_local_id, getpid(), getppid());
             declaration->s_header.s_payload_len = length;
 
             struct msg_source src = {my_local_id, pipe_write_ends[my_local_id], processes_num };
             int start_result = send_multicast(&src, declaration);
             if (start_result < 0) return -1;
+            my_current_timestamp++;
 
             //receive "starts" from others
             struct msg_destination dst = {my_local_id, pipe_read_ends[my_local_id], processes_num };
             int wait_result = wait_for_messages_from_everybody(&dst, STARTED);
             if (wait_result < 0) return -1;
+            my_current_timestamp++;
+            length = snprintf(buf, 80, log_received_all_started_fmt, my_local_id);
+            write_events_log(buf, length);
+            printf("%s", buf);
 
+            //send done
+            declaration->s_header.s_type = DONE;
+            declaration->s_header.s_local_time = my_current_timestamp;
+            length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_done_fmt, my_local_id);
+            declaration->s_header.s_payload_len = length;
 
+            start_result = send_multicast(&src, declaration);
+            if (start_result < 0) return -1;
+            my_current_timestamp++;
+
+            //receive "done" from others
+            wait_result = wait_for_messages_from_everybody(&dst, DONE);
+            if (wait_result < 0) return -1;
+            my_current_timestamp++;
+            length = snprintf(buf, 80, log_received_all_done_fmt, my_local_id);
+            write_events_log(buf, length);
+            printf("%s", buf);
+
+            //todo:  что то с ожиданием род процесса
+            close_left_pipe_ends(my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id], processes_num);
             free(declaration);
 
-            //todo: send end
             return 0;
         }
     }
 
-    if (my_local_id == PARENT_ID) {
-        for (int from = 0; from < processes_num; from++) {
-            for (int to = 0; to < processes_num; to++) {
-                if (from == to) continue;
+    for (int from = 0; from < processes_num; from++) {
+        for (int to = 0; to < processes_num; to++) {
+            if (from == to) continue;
 
-                if (from != 0) {
-                    close(pipe_write_ends[from][to]);
-                    my_current_timestamp++;
-                    write_pipe_log(from, to, my_local_id, CLOSED_WRITE);
+            if (from != 0) {
+                close(pipe_write_ends[from][to]);
+                my_current_timestamp++;
+                write_pipe_log_close(from, to, pipe_write_ends[from][to], CLOSED_WRITE);
 
-                    close(pipe_read_ends[from][to]);
-                    my_current_timestamp++;
-                    write_pipe_log(from, to, my_local_id, CLOSED_READ);
-                }
+                close(pipe_read_ends[from][to]);
+                my_current_timestamp++;
+                write_pipe_log_close(from, to, pipe_read_ends[from][to], CLOSED_READ);
             }
         }
-
-        sleep(100);
-        struct msg_destination dst = {my_local_id, pipe_read_ends[my_local_id], processes_num };
-        int wait_result = wait_for_messages_from_everybody(&dst, STARTED);
-        if (wait_result < 0) return -1;
     }
+
+
+    // todo: проверить
+    char buf[100];
+    struct msg_destination dst = {my_local_id, pipe_read_ends[my_local_id], processes_num};
+    int wait_result = wait_for_messages_from_everybody(&dst, STARTED);
+    if (wait_result < 0) return -1;
+    my_current_timestamp++;
+    int length = snprintf(buf, 80, log_received_all_started_fmt, 999);
+    write_events_log(buf, length);
+    printf("%s", buf);
+
+    wait_result = wait_for_messages_from_everybody(&dst, DONE);
+    if (wait_result < 0) return -1;
+    close_left_pipe_ends(my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id], processes_num);
+    my_current_timestamp++;
+    length = snprintf(buf, 80, log_received_all_done_fmt, 999);
+    write_events_log(buf, length);
+    printf("%s", buf);
 
     return 0;
 }
@@ -142,13 +175,12 @@ int send_multicast(void* void_source, const Message* msg) {
         ssize_t written_bytes = write(source->write_ends[i], msg, sizeof(Message));
         if (written_bytes < 0) {
             perror("write");
-            return -1;
+            return ERROR;
         } else {
-            write_events_log(msg->s_payload, msg->s_header.s_payload_len);
-            printf("%" PRId16 " | (send_multicast) to %d success | %s\n", my_current_timestamp, i, msg->s_payload);
+            printf("%" PRId16 " | (send_multicast) to %d success | %s\n", my_current_timestamp, i, msg->s_payload); //todo: only for test
         }
     }
-    return 0;
+    return SUCCESS;
 }
 
 int wait_for_messages_from_everybody(void* void_dest, MessageType supposed_type) {
@@ -163,22 +195,24 @@ int wait_for_messages_from_everybody(void* void_dest, MessageType supposed_type)
             if (received_process_nums[waited_proc_id] == 1) continue; //msg was already read
             int result = receive(void_dest, (local_id) waited_proc_id, answer);
             switch (result) {
-                case 0:
+                case SUCCESS:
                     if (answer->s_header.s_type == supposed_type) {
                         received_declarations += 1;
                         received_process_nums[waited_proc_id] = 1;
+                        my_current_timestamp = calc_timestamp(answer->s_header.s_local_time, my_current_timestamp);
+                        my_current_timestamp++;
                     } else continue;
-                case 1:
+                case EMPTY:
                     sleep(1);
                     continue;
-                case 2:
-                    return 0;
+                case EMPTY_EOF:
+                    continue;
                 default:
-                    return -1;
+                    return ERROR;
             }
         }
     }
-    return 0;
+    return SUCCESS;
 }
 
 int receive(void* void_dest, local_id from, Message* msg) {
@@ -188,26 +222,19 @@ int receive(void* void_dest, local_id from, Message* msg) {
         case -1: // case -1 means pipe is empty and errno = EAGAIN
             if (errno == EAGAIN) {
                 printf("%d tries to receive: pipe from process %d is empty\n", dest->id, from);
-                return 1;
+                return EMPTY;
             } else {
                 perror("read");
-                return -1;
+                return ERROR;
             }
         case 0: // case 0 means all bytes are read and EOF
             printf("%d tries to receive: End of conversation with %d\n", dest->id, from);
-            return 2;
+            return EMPTY_EOF;
         default:
             printf("%d received MSG = %s\n", dest->id, msg->s_payload);
-            return 0;
+            return SUCCESS;
     }
 }
-
-
-
-
-
-
-
 
 int receive_any(void* void_dest, Message* msg) {
     struct msg_destination* dest = (struct msg_destination*) void_dest;
@@ -216,12 +243,12 @@ int receive_any(void* void_dest, Message* msg) {
             if (waited_proc_id == dest->id) continue;
             int result = receive(void_dest, (local_id) waited_proc_id, msg);
             switch (result) {
-                case 0:
-                    return 0;
-                case -1:
+                case SUCCESS:
+                    return SUCCESS;
+                case ERROR:
+                    return ERROR;
+                default: //EMPTY or EOF
                     continue;
-                default:
-                    return -1;
             }
         }
     }
@@ -232,18 +259,31 @@ int send(void* void_source, local_id dst, const Message* msg) {
     ssize_t written_bytes = write(source->write_ends[dst], msg, sizeof(Message));
     if (written_bytes < 0) {
         perror("write");
-        return -1;
+        return ERROR;
     } else {
         write_events_log(msg->s_payload, msg->s_header.s_payload_len);
         printf("%" PRId16 " | (send) to %d success | %s\n", my_current_timestamp, dst, msg->s_payload);
-        return 0;
+        return SUCCESS;
     }
 }
 
-int calc_timestamp(int external_timestamp, int internal_counter) {
-    if (external_timestamp > internal_counter) return external_timestamp + 1;
-    else return internal_counter + 1;
-} //todo: use
+int close_left_pipe_ends(int process_id, int* pipe_write_ends,  int* pipe_read_ends, long processes_num) {
+    for (int second_proc_num = 0; second_proc_num < processes_num; second_proc_num++) {
+        if (second_proc_num == process_id) continue;
+        close(pipe_write_ends[second_proc_num]);
+        my_current_timestamp++;
+        write_pipe_log_close(process_id, second_proc_num, pipe_write_ends[second_proc_num],  CLOSED_WRITE);
+
+        close(pipe_read_ends[second_proc_num]);
+        my_current_timestamp++;
+        write_pipe_log_close(second_proc_num, process_id,pipe_read_ends[second_proc_num], CLOSED_READ);
+    }
+};
+
+timestamp_t calc_timestamp(timestamp_t external_timestamp, timestamp_t internal_counter) {
+    if (external_timestamp > internal_counter) return external_timestamp;
+    else return internal_counter;
+}
 
 void write_events_log(const char* message, int message_len) {
     ssize_t bytes_written = write(events_log_file, message, message_len);
@@ -252,24 +292,42 @@ void write_events_log(const char* message, int message_len) {
     }
 }
 
-void write_pipe_log(int first, int second, int my_local_id, enum pipe_log_type type) {
+void write_pipe_log_close(int first, int second, int fd, enum pipe_log_type type) {
     char message[100];
     char* pattern;
     int length;
-    if (type == OPENED)
-        pattern = "%d | Process %d: Pipe between processes with local ids %d and %d was OPENED\n";
-    else if (type == CLOSED_WRITE)
-        pattern = "%d | Process %d: Pipe's end to WRITE from %d to %d was CLOSED\n";
+    if (type == CLOSED_WRITE)
+        pattern = "%d | Pipe's WRITE end from %d to %d was CLOSED. Number %d\n";
     else if (type == CLOSED_READ)
-        pattern = "%d | Process %d: Pipe's end to READ to %d from %d was CLOSED\n";
+        pattern = "%d | Pipe's READ end to %d from %d was CLOSED. Number %d\n";
 
     length = snprintf(message, sizeof(message), pattern,
                       my_current_timestamp,
-                      my_local_id, first,
-                      second);
+                      first,
+                      second,
+                      fd);
 
     ssize_t bytes_written = write(pipe_log_file, message, length);
+    printf("%s", message);
     if (bytes_written == -1) {
-        printf("Couldn't write log for pipe between processes with local ids %d and %d\n", first, second);
+        printf("Couldn't write log for closing pipe between processes with local ids %d and %d\n", first, second);
     }
 }
+
+void write_pipe_log_open(int first, int second, int fd0, int fd1) {
+    char message[100];
+    char* pattern = "%d | Pipe between processes %d and %d was OPENED. Number read: %d write: %d\n";
+    int length = snprintf(message, sizeof(message), pattern,
+                      my_current_timestamp,
+                      first,
+                      second,
+                      fd0, fd1);
+
+    ssize_t bytes_written = write(pipe_log_file, message, length);
+    printf("%s", message);
+    if (bytes_written == -1) {
+        printf("Couldn't write log for opening pipe between processes with local ids %d and %d\n", first, second);
+    }
+}
+
+
