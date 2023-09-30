@@ -18,12 +18,9 @@
 #include "pa1.h"
 #include "common.h"
 
-#define PROCESS_NUM 10
+#define PROCESS_NUM 15
 #define NOT_EXIST (-999)
-
-int pipe_log_file;
-int events_log_file;
-timestamp_t my_current_timestamp;
+#define BUFFER_80 80
 
 enum {
     SUCCESS = 0,
@@ -49,12 +46,17 @@ struct msg_destination {
     long processes_num;
 };
 
+void open_log_files();
 int start_parent(long children_num);
 timestamp_t calc_timestamp(timestamp_t external_timestamp, timestamp_t internal_counter);
 int wait_for_messages_from_everybody(void* void_dest, MessageType supposed_type);
 void write_pipe_log_close(int first, int second, int fd, enum pipe_log_type type);
-int close_left_pipe_ends(int process_id, int* pipe_write_ends,  int* pipe_read_ends, long processes_num);
+void close_left_pipe_ends(int process_id, int* pipe_write_ends,  int* pipe_read_ends);
+void close_all_pipe_ends(int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_write_ends[PROCESS_NUM][PROCESS_NUM]);
 void write_pipe_log_open(int first, int second, int fd0, int fd1);
 void write_events_log(const char* message, int message_len);
+int open_all_pipe_ends(int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_write_ends[PROCESS_NUM][PROCESS_NUM]);
+void close_specific_pipe_ends(int process_id, int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_write_ends[PROCESS_NUM][PROCESS_NUM]);
+void close_log_files();
 
 #endif //LAB1_PROCESS_H
