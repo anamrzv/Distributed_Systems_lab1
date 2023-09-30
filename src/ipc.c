@@ -122,7 +122,6 @@ int start_parent(long children_num) {
             write_events_log(buf, length);
             printf("%s", buf);
 
-            //todo:  что то с ожиданием род процесса
             close_left_pipe_ends(my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id], processes_num);
             free(declaration);
 
@@ -146,14 +145,12 @@ int start_parent(long children_num) {
         }
     }
 
-
-    // todo: проверить
-    char buf[100];
+    char buf[80];
     struct msg_destination dst = {my_local_id, pipe_read_ends[my_local_id], processes_num};
     int wait_result = wait_for_messages_from_everybody(&dst, STARTED);
     if (wait_result < 0) return -1;
     my_current_timestamp++;
-    int length = snprintf(buf, 80, log_received_all_started_fmt, 999);
+    int length = snprintf(buf, 80, log_received_all_started_fmt, my_local_id);
     write_events_log(buf, length);
     printf("%s", buf);
 
@@ -161,10 +158,11 @@ int start_parent(long children_num) {
     if (wait_result < 0) return -1;
     close_left_pipe_ends(my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id], processes_num);
     my_current_timestamp++;
-    length = snprintf(buf, 80, log_received_all_done_fmt, 999);
+    length = snprintf(buf, 80, log_received_all_done_fmt, my_local_id);
     write_events_log(buf, length);
     printf("%s", buf);
 
+    //ожидание добавить
     return 0;
 }
 
@@ -176,8 +174,6 @@ int send_multicast(void* void_source, const Message* msg) {
         if (written_bytes < 0) {
             perror("write");
             return ERROR;
-        } else {
-            printf("%" PRId16 " | (send_multicast) to %d success | %s\n", my_current_timestamp, i, msg->s_payload); //todo: only for test
         }
     }
     return SUCCESS;
@@ -187,7 +183,9 @@ int wait_for_messages_from_everybody(void* void_dest, MessageType supposed_type)
     struct msg_destination* dest = (struct msg_destination*) void_dest;
     int received_declarations = 0;
     int received_process_nums[PROCESS_NUM] = {0};
-    long waited_processes_num = dest->processes_num - 2;
+    long waited_processes_num;
+    if (dest->id == 0) waited_processes_num = dest->processes_num - 1;
+    else waited_processes_num = dest->processes_num - 2;
     Message* answer = malloc(sizeof (Message));
     while (received_declarations != waited_processes_num) {
         for (int waited_proc_id = 1; waited_proc_id < dest->processes_num; waited_proc_id++) {
@@ -221,17 +219,14 @@ int receive(void* void_dest, local_id from, Message* msg) {
     switch (read_result) {
         case -1: // case -1 means pipe is empty and errno = EAGAIN
             if (errno == EAGAIN) {
-                printf("%d tries to receive: pipe from process %d is empty\n", dest->id, from);
                 return EMPTY;
             } else {
                 perror("read");
                 return ERROR;
             }
         case 0: // case 0 means all bytes are read and EOF
-            printf("%d tries to receive: End of conversation with %d\n", dest->id, from);
             return EMPTY_EOF;
         default:
-            printf("%d received MSG = %s\n", dest->id, msg->s_payload);
             return SUCCESS;
     }
 }
@@ -261,8 +256,6 @@ int send(void* void_source, local_id dst, const Message* msg) {
         perror("write");
         return ERROR;
     } else {
-        write_events_log(msg->s_payload, msg->s_header.s_payload_len);
-        printf("%" PRId16 " | (send) to %d success | %s\n", my_current_timestamp, dst, msg->s_payload);
         return SUCCESS;
     }
 }
