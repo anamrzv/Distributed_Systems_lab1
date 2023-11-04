@@ -9,7 +9,7 @@
 #include "include/process.h"
 
 int send(void* void_source, local_id dst, const Message* msg) {
-    struct msg_source* source = (struct msg_source*) void_source;
+    struct msg_transfer* source = (struct msg_transfer*) void_source;
     ssize_t written_bytes = write(source->write_ends[dst], msg, (ssize_t) (sizeof(MessageHeader) + msg->s_header.s_payload_len));
     if (written_bytes < 0) {
         perror("write");
@@ -20,7 +20,7 @@ int send(void* void_source, local_id dst, const Message* msg) {
 }
 
 int send_multicast(void* void_source, const Message* msg) {
-    struct msg_source* source = (struct msg_source*) void_source;
+    struct msg_transfer* source = (struct msg_transfer*) void_source;
     for (int i = 0; i < source->processes_num; i++) {
         if (i == source->id ) continue;
         int result = send(void_source, (local_id) i, msg);
@@ -30,7 +30,7 @@ int send_multicast(void* void_source, const Message* msg) {
 }
 
 int receive(void* void_dest, local_id from, Message* msg) {
-    struct msg_destination* dest = (struct msg_destination*) void_dest;
+    struct msg_transfer* dest = (struct msg_transfer*) void_dest;
     long read_result = read(dest->read_ends[from], msg, sizeof(MessageHeader));
     switch (read_result) {
         case -1: // case -1 means pipe is empty and errno = EAGAIN
@@ -50,7 +50,7 @@ int receive(void* void_dest, local_id from, Message* msg) {
 }
 
 int receive_any(void* void_dest, Message* msg) {
-    struct msg_destination* dest = (struct msg_destination*) void_dest;
+    struct msg_transfer* dest = (struct msg_transfer*) void_dest;
     while (1) {
         for (int waited_proc_id = 0; waited_proc_id < dest->processes_num; waited_proc_id++) {
             if (waited_proc_id == dest->id) continue;

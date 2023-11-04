@@ -3,17 +3,16 @@
 //
 
 #include "include/process.h"
+#include "include/banking.h"
 
 int pipe_log_file;
 int events_log_file;
 
-timestamp_t my_current_timestamp;
 long processes_num;
 
-int start_parent(long children_num) {
+int start_parent(long children_num, const balance_t *balance) {
     open_log_files();
 
-    my_current_timestamp = 0;
     processes_num = children_num + 1;
     int my_local_id = PARENT_ID;
 
@@ -25,64 +24,112 @@ int start_parent(long children_num) {
 
     for (int i = 1; i < processes_num; i++) {
         pid_t child_pid = fork();
-        my_current_timestamp++;
         if (child_pid == -1) {
             printf("fork() failed for process number %d\n", i + 1);
             close_all_pipe_ends(pipe_read_ends, pipe_write_ends);
             return -1;
         } else if (child_pid == 0) { // child process
-            my_current_timestamp = 0;
             my_local_id = i;
+            timestamp_t start_time = get_physical_time();
+
+            balance_t my_local_balance = balance[i - 1];
+            BalanceHistory my_local_balance_history;
+            my_local_balance_history.s_id = (local_id) my_local_id;
+            my_local_balance_history.s_history_len = 0;
 
             //write start to log
             char buf[BUFFER_80];
-            int length = snprintf(buf, 80, log_started_fmt, my_local_id, getpid(), getppid());
-            write_events_log(buf, length);
-            printf("%s", buf);
+            write_events_log(buf, snprintf(buf, 80, log_started_fmt, start_time, my_local_id, getpid(), getppid(),
+                                           my_local_balance));
 
             //leave only its ends
             close_specific_pipe_ends(my_local_id, pipe_read_ends, pipe_write_ends);
 
             //send start
-            Message* declaration = malloc(sizeof (Message));
+            Message *declaration = malloc(sizeof(Message));
             declaration->s_header.s_magic = MESSAGE_MAGIC;
             declaration->s_header.s_type = STARTED;
-            declaration->s_header.s_local_time = my_current_timestamp;
-            length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_started_fmt,
-                              my_local_id, getpid(), getppid());
+            declaration->s_header.s_local_time = start_time;
+            int length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_started_fmt, start_time,
+                                  my_local_id, getpid(), getppid(), my_local_balance);
             declaration->s_header.s_payload_len = length;
 
-            struct msg_source src = {my_local_id, pipe_write_ends[my_local_id], processes_num};
-            int start_result = send_multicast(&src, declaration);
+            struct msg_transfer msg_tran = {my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id],
+                                            processes_num};
+            int start_result = send_multicast(&msg_tran, declaration);
             if (start_result < 0) return -1;
-            my_current_timestamp++;
 
             //receive "starts" from others
-            struct msg_destination dst = {my_local_id, pipe_read_ends[my_local_id], processes_num };
-            int wait_result = wait_for_messages_from_everybody(&dst, STARTED);
+            int wait_result = wait_for_messages_from_everybody(&msg_tran, STARTED);
             if (wait_result < 0) return -1;
-            my_current_timestamp++;
-            length = snprintf(buf, BUFFER_80, log_received_all_started_fmt, my_local_id);
-            write_events_log(buf, length);
-            printf("%s", buf);
+            write_events_log(buf,
+                             snprintf(buf, BUFFER_80, log_received_all_started_fmt, get_physical_time(), my_local_id));
 
-            //send done
-            declaration->s_header.s_type = DONE;
-            declaration->s_header.s_local_time = my_current_timestamp;
-            length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_done_fmt, my_local_id);
-            declaration->s_header.s_payload_len = length;
+            //receive transfer, stop
+            int other_done_count = 0;
+            int not_stopped = 1;
+            TransferOrder *transferOrder;
+            while (other_done_count != children_num - 1 || not_stopped) {
+                int receive_result = receive_any(&msg_tran, declaration);
+                if (receive_result < 0) return ERROR;
+                update_history(&my_local_balance_history, my_local_balance);
+                switch (declaration->s_header.s_type) {
+                    case TRANSFER:
+                        transferOrder = (TransferOrder *) declaration->s_payload;
+                        if (transferOrder->s_src == my_local_id) {
+                            my_local_balance -= transferOrder->s_amount;
+                            int send_result = send(&msg_tran, transferOrder->s_dst, declaration);
+                            if (send_result > 0)
+                                write_events_log(buf, snprintf(buf, 80, log_transfer_out_fmt, get_physical_time(),
+                                                               transferOrder->s_src,
+                                                               transferOrder->s_amount, transferOrder->s_dst));
+                            else return ERROR;
+                        } else if (transferOrder->s_dst == my_local_id) {
+                            my_local_balance += transferOrder->s_amount;
+                            write_events_log(buf, snprintf(buf, 80, log_transfer_in_fmt, get_physical_time(),
+                                                           transferOrder->s_src,
+                                                           transferOrder->s_amount, transferOrder->s_dst));
+                            Message acknowledgment;
+                            acknowledgment.s_header.s_type = ACK;
+                            acknowledgment.s_header.s_magic = MESSAGE_MAGIC;
+                            acknowledgment.s_header.s_payload_len = 0;
+                            acknowledgment.s_header.s_local_time = get_physical_time();
+                            int send_result = send(&msg_tran, transferOrder->s_dst, declaration);
+                            if (send_result < 0) return ERROR;
+                        }
+                        break;
+                    case STOP:
+                        not_stopped = 0;
+                        declaration->s_header.s_type = DONE;
+                        declaration->s_header.s_local_time = get_physical_time();
+                        length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_done_fmt, get_physical_time(),
+                                          my_local_id,
+                                          my_local_balance);
+                        declaration->s_header.s_payload_len = length;
 
-            start_result = send_multicast(&src, declaration);
-            if (start_result < 0) return -1;
-            my_current_timestamp++;
+                        int stop_result = send_multicast(&msg_tran, declaration);
+                        if (stop_result < 0) return ERROR;
+                        else write_events_log(buf,
+                                             snprintf(buf, BUFFER_80, log_done_fmt, get_physical_time(), my_local_id,
+                                                      my_local_balance));
+                        break;
+                    case DONE:
+                        other_done_count++;
+                        break;
+                    default:
+                        return ERROR;
+                }
+            }
 
-            //receive "done" from others
-            wait_result = wait_for_messages_from_everybody(&dst, DONE);
-            if (wait_result < 0) return -1;
-            my_current_timestamp++;
-            length = snprintf(buf, BUFFER_80, log_received_all_done_fmt, my_local_id);
-            write_events_log(buf, length);
-            printf("%s", buf);
+            //send other done
+            write_events_log(buf,snprintf(buf, BUFFER_80, log_received_all_done_fmt, get_physical_time(), my_local_id));
+
+            update_history(&my_local_balance_history, my_local_balance);
+            declaration->s_header.s_type = BALANCE_HISTORY;
+            declaration->s_header.s_local_time = get_physical_time();
+            declaration->s_header.s_payload_len = sizeof(BalanceHistory);
+            memcpy(declaration->s_payload, &my_local_balance_history, declaration->s_header.s_payload_len);
+            send(&msg_tran, PARENT_ID, declaration);
 
             close_left_pipe_ends(my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id]);
             free(declaration);
@@ -94,22 +141,36 @@ int start_parent(long children_num) {
     //leave only its ends
     close_specific_pipe_ends(my_local_id, pipe_read_ends, pipe_write_ends);
 
+    //wait all children are started
     char buf[BUFFER_80];
     struct msg_destination dst = {my_local_id, pipe_read_ends[my_local_id], processes_num};
     int wait_result = wait_for_messages_from_everybody(&dst, STARTED);
     if (wait_result < 0) return ERROR;
-    my_current_timestamp++;
-    int length = snprintf(buf, BUFFER_80, log_received_all_started_fmt, my_local_id);
-    write_events_log(buf, length);
-    printf("%s", buf);
+    write_events_log(buf, snprintf(buf, BUFFER_80, log_received_all_started_fmt, get_physical_time(), my_local_id));
 
+    //bank robbery
+    struct msg_transfer msg_tran = {my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id],
+                                    processes_num};
+    bank_robbery(&msg_tran, (local_id) children_num);
+
+    //send stop
+    Message *declaration = malloc(sizeof(Message));
+    declaration->s_header.s_magic = MESSAGE_MAGIC;
+    declaration->s_header.s_type = STOP;
+    declaration->s_header.s_local_time = get_physical_time();
+    declaration->s_header.s_payload_len = 0;
+
+    int send_result = send_multicast(&msg_tran, declaration);
+    if (send_result < 0) return ERROR;
+
+    //wait all children are done
     wait_result = wait_for_messages_from_everybody(&dst, DONE);
     if (wait_result < 0) return ERROR;
     close_left_pipe_ends(my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id]);
-    my_current_timestamp++;
-    length = snprintf(buf, BUFFER_80, log_received_all_done_fmt, my_local_id);
-    write_events_log(buf, length);
-    printf("%s", buf);
+    write_events_log(buf, snprintf(buf, BUFFER_80, log_received_all_done_fmt, get_physical_time(), my_local_id));
+
+    //get and print history
+    wait_for_history_from_everybody(&msg_tran);
 
     int status;
     for (size_t i = 0; i < children_num; i++) {
@@ -121,14 +182,63 @@ int start_parent(long children_num) {
     return 0;
 }
 
-int wait_for_messages_from_everybody(void* void_dest, MessageType supposed_type) {
-    struct msg_destination* dest = (struct msg_destination*) void_dest;
+void update_history(BalanceHistory* balance_history, balance_t cur_balance) {
+    timestamp_t curr_time = get_physical_time();
+
+    for (timestamp_t i = balance_history->s_history_len; i < curr_time; ++i) {
+        BalanceState* balance_state = balance_history->s_history + i;
+        balance_state->s_time = i;
+        balance_state->s_balance = cur_balance;
+        balance_state->s_balance_pending_in = 0;
+    }
+    balance_history->s_history_len = curr_time;
+}
+
+int wait_for_history_from_everybody(void *void_dest) {
+    struct msg_transfer *dest = (struct msg_transfer *) void_dest;
+    int received_declarations = 0;
+    int received_process_nums[PROCESS_NUM] = {0};
+    long waited_processes_num = processes_num - 1;
+    Message *answer = malloc(sizeof(Message));
+    BalanceHistory balance_history;
+    AllHistory all_history;
+    all_history.s_history_len = waited_processes_num;
+    while (received_declarations != waited_processes_num) {
+        for (int waited_proc_id = 1; waited_proc_id < processes_num; waited_proc_id++) {
+            if (waited_proc_id == dest->id) continue;
+            if (received_process_nums[waited_proc_id] == 1) continue; //msg was already read
+            int result = receive(void_dest, (local_id) waited_proc_id, answer);
+            switch (result) {
+                case SUCCESS:
+                    if (answer->s_header.s_type == BALANCE_HISTORY) {
+                        received_declarations += 1;
+                        received_process_nums[waited_proc_id] = 1;
+                        memcpy((void *) &balance_history, answer->s_payload,
+                               sizeof(char) * answer->s_header.s_payload_len);
+                        all_history.s_history[waited_proc_id - 1] = balance_history;
+                    } else continue;
+                case EMPTY:
+                    sleep(1);
+                    continue;
+                case EMPTY_EOF:
+                    continue;
+                default:
+                    return ERROR;
+            }
+        }
+    }
+    print_history(&all_history);
+    return SUCCESS;
+}
+
+int wait_for_messages_from_everybody(void *void_dest, MessageType supposed_type) {
+    struct msg_destination *dest = (struct msg_destination *) void_dest;
     int received_declarations = 0;
     int received_process_nums[PROCESS_NUM] = {0};
     long waited_processes_num;
     if (dest->id == 0) waited_processes_num = processes_num - 1;
     else waited_processes_num = processes_num - 2;
-    Message* answer = malloc(sizeof (Message));
+    Message *answer = malloc(sizeof(Message));
     while (received_declarations != waited_processes_num) {
         for (int waited_proc_id = 1; waited_proc_id < processes_num; waited_proc_id++) {
             if (waited_proc_id == dest->id) continue;
@@ -139,8 +249,6 @@ int wait_for_messages_from_everybody(void* void_dest, MessageType supposed_type)
                     if (answer->s_header.s_type == supposed_type) {
                         received_declarations += 1;
                         received_process_nums[waited_proc_id] = 1;
-                        my_current_timestamp = calc_timestamp(answer->s_header.s_local_time, my_current_timestamp);
-                        my_current_timestamp++;
                     } else continue;
                 case EMPTY:
                     sleep(1);
@@ -155,48 +263,43 @@ int wait_for_messages_from_everybody(void* void_dest, MessageType supposed_type)
     return SUCCESS;
 }
 
-void close_left_pipe_ends(int process_id, int* pipe_write_ends,  int* pipe_read_ends) {
+void close_left_pipe_ends(int process_id, int *pipe_write_ends, int *pipe_read_ends) {
     for (int second_proc_num = 0; second_proc_num < processes_num; second_proc_num++) {
         if (second_proc_num == process_id) continue;
         close(pipe_write_ends[second_proc_num]);
-        my_current_timestamp++;
-        write_pipe_log_close(process_id, second_proc_num, pipe_write_ends[second_proc_num],  CLOSED_WRITE);
+        write_pipe_log_close(process_id, second_proc_num, pipe_write_ends[second_proc_num], CLOSED_WRITE);
 
         close(pipe_read_ends[second_proc_num]);
-        my_current_timestamp++;
-        write_pipe_log_close(second_proc_num, process_id,pipe_read_ends[second_proc_num], CLOSED_READ);
+        write_pipe_log_close(second_proc_num, process_id, pipe_read_ends[second_proc_num], CLOSED_READ);
     }
 }
 
 void close_all_pipe_ends(int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_write_ends[PROCESS_NUM][PROCESS_NUM]) {
     for (int i = 0; i < processes_num; i++) {
-        for (int j = 0; j< processes_num; j++) {
+        for (int j = 0; j < processes_num; j++) {
             if (pipe_read_ends[i][j] != NOT_EXIST) {
                 close(pipe_read_ends[i][j]);
-                my_current_timestamp++;
                 write_pipe_log_close(j, i, pipe_read_ends[i][j], CLOSED_READ);
             }
             if (pipe_write_ends[i][j] != NOT_EXIST) {
                 close(pipe_write_ends[i][j]);
-                my_current_timestamp++;
-                write_pipe_log_close(i, j, pipe_write_ends[i][j],  CLOSED_WRITE);
+                write_pipe_log_close(i, j, pipe_write_ends[i][j], CLOSED_WRITE);
             }
         }
     }
 }
 
-void close_specific_pipe_ends(int process_id, int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_write_ends[PROCESS_NUM][PROCESS_NUM]) {
+void close_specific_pipe_ends(int process_id, int pipe_read_ends[PROCESS_NUM][PROCESS_NUM],
+                              int pipe_write_ends[PROCESS_NUM][PROCESS_NUM]) {
     for (int from = 0; from < processes_num; from++) {
         for (int to = 0; to < processes_num; to++) {
             if (from == to) continue;
 
             if (from != process_id) {
                 close(pipe_write_ends[from][to]);
-                my_current_timestamp++;
                 write_pipe_log_close(from, to, pipe_write_ends[from][to], CLOSED_WRITE);
 
                 close(pipe_read_ends[from][to]);
-                my_current_timestamp++;
                 write_pipe_log_close(from, to, pipe_read_ends[from][to], CLOSED_READ);
             }
         }
@@ -213,7 +316,6 @@ int open_all_pipe_ends(int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_wr
                     close_all_pipe_ends(pipe_read_ends, pipe_write_ends);
                     return ERROR;
                 }
-                my_current_timestamp++;
                 write_pipe_log_open(from, to, fd[0], fd[1]);
 
                 pipe_read_ends[to][from] = fd[0];
@@ -227,13 +329,9 @@ int open_all_pipe_ends(int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_wr
     return SUCCESS;
 }
 
-timestamp_t calc_timestamp(timestamp_t external_timestamp, timestamp_t internal_counter) {
-    if (external_timestamp > internal_counter) return external_timestamp;
-    else return internal_counter;
-}
-
-void write_events_log(const char* message, int message_len) {
+void write_events_log(const char *message, int message_len) {
     ssize_t bytes_written = write(events_log_file, message, message_len);
+    printf("%s", message);
     if (bytes_written == -1) {
         printf("Couldn't write event log");
     }
@@ -241,7 +339,7 @@ void write_events_log(const char* message, int message_len) {
 
 void write_pipe_log_close(int first, int second, int fd, enum pipe_log_type type) {
     char message[100];
-    char* pattern;
+    char *pattern;
     int length;
     if (type == CLOSED_WRITE)
         pattern = "Pipe's WRITE end from %d to %d was CLOSED. Number %d\n";
@@ -262,7 +360,7 @@ void write_pipe_log_close(int first, int second, int fd, enum pipe_log_type type
 
 void write_pipe_log_open(int first, int second, int fd0, int fd1) {
     char message[100];
-    char* pattern = "Pipe between processes %d and %d was OPENED. Number read: %d write: %d\n";
+    char *pattern = "Pipe between processes %d and %d was OPENED. Number read: %d write: %d\n";
     int length = snprintf(message, sizeof(message), pattern,
                           first,
                           second,
