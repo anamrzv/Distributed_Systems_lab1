@@ -14,6 +14,8 @@
 #include <time.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
 #include "ipc.h"
 #include "pa1.h"
 #include "common.h"
@@ -46,7 +48,6 @@ struct msg_destination {
     long processes_num;
 };
 
-void open_log_files();
 int start_parent(long children_num);
 timestamp_t calc_timestamp(timestamp_t external_timestamp, timestamp_t internal_counter);
 int wait_for_messages_from_everybody(void* void_dest, MessageType supposed_type);
@@ -57,6 +58,7 @@ void write_pipe_log_open(int first, int second, int fd0, int fd1);
 void write_events_log(const char* message, int message_len);
 int open_all_pipe_ends(int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_write_ends[PROCESS_NUM][PROCESS_NUM]);
 void close_specific_pipe_ends(int process_id, int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_write_ends[PROCESS_NUM][PROCESS_NUM]);
-void close_log_files();
+void close_log_files(void);
+void open_log_files(void);
 
 #endif //LAB1_PROCESS_H

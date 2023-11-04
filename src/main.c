@@ -2,8 +2,6 @@
 // Created by Ana Mun on 17.09.2023.
 //
 
-#include <stdio.h>
-#include <stdlib.h>
 #include <getopt.h>
 #include "include/process.h"
 
@@ -40,6 +38,10 @@ int main(int argc, char *argv[]) {
 
     char *p;
     long conv = strtol(num_of_processes, &p, 10);
+    if (conv < 1 || conv > MAX_PROCESS_ID) {
+        printf("Непредусмотренное число процессов\n");
+        return -1;
+    }
     start_parent(conv);
 
 }

@@ -17,8 +17,8 @@ int start_parent(long children_num) {
     processes_num = children_num + 1;
     int my_local_id = PARENT_ID;
 
-    int pipe_write_ends[PROCESS_NUM][PROCESS_NUM] = {0};
-    int pipe_read_ends[PROCESS_NUM][PROCESS_NUM] = {0};
+    int pipe_write_ends[PROCESS_NUM][PROCESS_NUM] = {{0}};
+    int pipe_read_ends[PROCESS_NUM][PROCESS_NUM] = {{0}};
 
     int open_result = open_all_pipe_ends(pipe_read_ends, pipe_write_ends);
     if (open_result == ERROR) return -1;
@@ -171,12 +171,12 @@ void close_left_pipe_ends(int process_id, int* pipe_write_ends,  int* pipe_read_
 void close_all_pipe_ends(int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_write_ends[PROCESS_NUM][PROCESS_NUM]) {
     for (int i = 0; i < processes_num; i++) {
         for (int j = 0; j< processes_num; j++) {
-            if (pipe_read_ends[i][j] != NOT_EXIST && fcntl(pipe_read_ends[i][j], F_GETFD) != -1) {
+            if (pipe_read_ends[i][j] != NOT_EXIST) {
                 close(pipe_read_ends[i][j]);
                 my_current_timestamp++;
                 write_pipe_log_close(j, i, pipe_read_ends[i][j], CLOSED_READ);
             }
-            if (pipe_write_ends[i][j] != NOT_EXIST && fcntl(pipe_write_ends[i][j], F_GETFD) != -1) {
+            if (pipe_write_ends[i][j] != NOT_EXIST) {
                 close(pipe_write_ends[i][j]);
                 my_current_timestamp++;
                 write_pipe_log_close(i, j, pipe_write_ends[i][j],  CLOSED_WRITE);
@@ -216,11 +216,6 @@ int open_all_pipe_ends(int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_wr
                 my_current_timestamp++;
                 write_pipe_log_open(from, to, fd[0], fd[1]);
 
-                if (fcntl(fd[0], F_SETFL, O_NONBLOCK) < 0) {
-                    perror("fcntl");
-                    close_all_pipe_ends(pipe_read_ends, pipe_write_ends);
-                    return ERROR;
-                }
                 pipe_read_ends[to][from] = fd[0];
                 pipe_write_ends[from][to] = fd[1];
             } else {
@@ -249,12 +244,11 @@ void write_pipe_log_close(int first, int second, int fd, enum pipe_log_type type
     char* pattern;
     int length;
     if (type == CLOSED_WRITE)
-        pattern = "%d | Pipe's WRITE end from %d to %d was CLOSED. Number %d\n";
+        pattern = "Pipe's WRITE end from %d to %d was CLOSED. Number %d\n";
     else if (type == CLOSED_READ)
-        pattern = "%d | Pipe's READ end to %d from %d was CLOSED. Number %d\n";
+        pattern = "%Pipe's READ end to %d from %d was CLOSED. Number %d\n";
 
     length = snprintf(message, sizeof(message), pattern,
-                      my_current_timestamp,
                       first,
                       second,
                       fd);
@@ -268,9 +262,8 @@ void write_pipe_log_close(int first, int second, int fd, enum pipe_log_type type
 
 void write_pipe_log_open(int first, int second, int fd0, int fd1) {
     char message[100];
-    char* pattern = "%d | Pipe between processes %d and %d was OPENED. Number read: %d write: %d\n";
+    char* pattern = "Pipe between processes %d and %d was OPENED. Number read: %d write: %d\n";
     int length = snprintf(message, sizeof(message), pattern,
-                          my_current_timestamp,
                           first,
                           second,
                           fd0, fd1);
@@ -282,7 +275,7 @@ void write_pipe_log_open(int first, int second, int fd0, int fd1) {
     }
 }
 
-void open_log_files() {
+void open_log_files(void) {
     pipe_log_file = open(pipes_log, O_WRONLY | O_APPEND | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
     if (pipe_log_file == -1) {
         perror("open");
@@ -296,7 +289,7 @@ void open_log_files() {
     }
 }
 
-void close_log_files() {
+void close_log_files(void) {
     if (close(pipe_log_file) != 0) {
         perror("close");
         exit(EXIT_FAILURE);

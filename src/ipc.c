@@ -10,7 +10,7 @@
 
 int send(void* void_source, local_id dst, const Message* msg) {
     struct msg_source* source = (struct msg_source*) void_source;
-    ssize_t written_bytes = write(source->write_ends[dst], msg, sizeof(Message));
+    ssize_t written_bytes = write(source->write_ends[dst], msg, (ssize_t) (sizeof(MessageHeader) + msg->s_header.s_payload_len));
     if (written_bytes < 0) {
         perror("write");
         return ERROR;
@@ -23,18 +23,15 @@ int send_multicast(void* void_source, const Message* msg) {
     struct msg_source* source = (struct msg_source*) void_source;
     for (int i = 0; i < source->processes_num; i++) {
         if (i == source->id ) continue;
-        ssize_t written_bytes = write(source->write_ends[i], msg, sizeof(Message));
-        if (written_bytes < 0) {
-            perror("write");
-            return ERROR;
-        }
+        int result = send(void_source, (local_id) i, msg);
+        if (result == ERROR) return ERROR;
     }
     return SUCCESS;
 }
 
 int receive(void* void_dest, local_id from, Message* msg) {
     struct msg_destination* dest = (struct msg_destination*) void_dest;
-    long read_result = read(dest->read_ends[from], msg, sizeof(Message));
+    long read_result = read(dest->read_ends[from], msg, sizeof(MessageHeader));
     switch (read_result) {
         case -1: // case -1 means pipe is empty and errno = EAGAIN
             if (errno == EAGAIN) {
@@ -46,7 +43,9 @@ int receive(void* void_dest, local_id from, Message* msg) {
         case 0: // case 0 means all bytes are read and EOF
             return EMPTY_EOF;
         default:
-            return SUCCESS;
+            read_result = read(dest->read_ends[from], ((char*) msg) + sizeof(MessageHeader), msg->s_header.s_payload_len);
+            if (read_result < 0) return ERROR;
+            else return SUCCESS;
     }
 }
 
