@@ -37,18 +37,6 @@ enum pipe_log_type {
     CLOSED_WRITE
 };
 
-struct msg_source {
-    int id;
-    int* write_ends;
-    long processes_num;
-};
-
-struct msg_destination {
-    int id;
-    int* read_ends;
-    long processes_num;
-};
-
 struct msg_transfer {
     int id;
     int* write_ends;
@@ -68,6 +56,6 @@ int open_all_pipe_ends(int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_wr
 void close_specific_pipe_ends(int process_id, int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_write_ends[PROCESS_NUM][PROCESS_NUM]);
 void close_log_files(void);
 void open_log_files(void);
-void update_history(BalanceHistory *history, balance_t amount)
+void update_history(BalanceHistory *history, balance_t amount);
 
 #endif //LAB1_PROCESS_H

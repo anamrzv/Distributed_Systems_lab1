@@ -69,9 +69,8 @@ int start_parent(long children_num, const balance_t *balance) {
             int other_done_count = 0;
             int not_stopped = 1;
             TransferOrder *transferOrder;
-            while (other_done_count != children_num - 1 || not_stopped) {
-                int receive_result = receive_any(&msg_tran, declaration);
-                if (receive_result < 0) return ERROR;
+            while (other_done_count != processes_num - 2 || not_stopped != 0) {
+                receive_any(&msg_tran, declaration);
                 update_history(&my_local_balance_history, my_local_balance);
                 switch (declaration->s_header.s_type) {
                     case TRANSFER:
@@ -79,22 +78,22 @@ int start_parent(long children_num, const balance_t *balance) {
                         if (transferOrder->s_src == my_local_id) {
                             my_local_balance -= transferOrder->s_amount;
                             int send_result = send(&msg_tran, transferOrder->s_dst, declaration);
-                            if (send_result > 0)
+                            if (send_result == 0) {
                                 write_events_log(buf, snprintf(buf, 80, log_transfer_out_fmt, get_physical_time(),
                                                                transferOrder->s_src,
-                                                               transferOrder->s_amount, transferOrder->s_dst));
+                                                               transferOrder->s_amount, transferOrder->s_dst)); }
                             else return ERROR;
                         } else if (transferOrder->s_dst == my_local_id) {
                             my_local_balance += transferOrder->s_amount;
                             write_events_log(buf, snprintf(buf, 80, log_transfer_in_fmt, get_physical_time(),
-                                                           transferOrder->s_src,
-                                                           transferOrder->s_amount, transferOrder->s_dst));
+                                                           transferOrder->s_dst,
+                                                           transferOrder->s_amount, transferOrder->s_src));
                             Message acknowledgment;
                             acknowledgment.s_header.s_type = ACK;
                             acknowledgment.s_header.s_magic = MESSAGE_MAGIC;
                             acknowledgment.s_header.s_payload_len = 0;
                             acknowledgment.s_header.s_local_time = get_physical_time();
-                            int send_result = send(&msg_tran, transferOrder->s_dst, declaration);
+                            int send_result = send(&msg_tran, PARENT_ID, &acknowledgment);
                             if (send_result < 0) return ERROR;
                         }
                         break;
@@ -102,7 +101,7 @@ int start_parent(long children_num, const balance_t *balance) {
                         not_stopped = 0;
                         declaration->s_header.s_type = DONE;
                         declaration->s_header.s_local_time = get_physical_time();
-                        length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_done_fmt, get_physical_time(),
+                        length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_done_fmt, declaration->s_header.s_local_time,
                                           my_local_id,
                                           my_local_balance);
                         declaration->s_header.s_payload_len = length;
@@ -110,7 +109,7 @@ int start_parent(long children_num, const balance_t *balance) {
                         int stop_result = send_multicast(&msg_tran, declaration);
                         if (stop_result < 0) return ERROR;
                         else write_events_log(buf,
-                                             snprintf(buf, BUFFER_80, log_done_fmt, get_physical_time(), my_local_id,
+                                             snprintf(buf, BUFFER_80, log_done_fmt, declaration->s_header.s_local_time, my_local_id,
                                                       my_local_balance));
                         break;
                     case DONE:
@@ -121,10 +120,14 @@ int start_parent(long children_num, const balance_t *balance) {
                 }
             }
 
-            //send other done
+            //got other done
             write_events_log(buf,snprintf(buf, BUFFER_80, log_received_all_done_fmt, get_physical_time(), my_local_id));
 
-            update_history(&my_local_balance_history, my_local_balance);
+            my_local_balance_history.s_history[my_local_balance_history.s_history_len].s_time = my_local_balance_history.s_history_len;
+            my_local_balance_history.s_history[my_local_balance_history.s_history_len].s_balance = my_local_balance;
+            my_local_balance_history.s_history[my_local_balance_history.s_history_len].s_balance_pending_in = 0;
+            my_local_balance_history.s_history_len++;
+
             declaration->s_header.s_type = BALANCE_HISTORY;
             declaration->s_header.s_local_time = get_physical_time();
             declaration->s_header.s_payload_len = sizeof(BalanceHistory);
@@ -143,14 +146,12 @@ int start_parent(long children_num, const balance_t *balance) {
 
     //wait all children are started
     char buf[BUFFER_80];
-    struct msg_destination dst = {my_local_id, pipe_read_ends[my_local_id], processes_num};
-    int wait_result = wait_for_messages_from_everybody(&dst, STARTED);
+    struct msg_transfer msg_tran = {my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id], processes_num};
+    int wait_result = wait_for_messages_from_everybody(&msg_tran, STARTED);
     if (wait_result < 0) return ERROR;
     write_events_log(buf, snprintf(buf, BUFFER_80, log_received_all_started_fmt, get_physical_time(), my_local_id));
 
     //bank robbery
-    struct msg_transfer msg_tran = {my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id],
-                                    processes_num};
     bank_robbery(&msg_tran, (local_id) children_num);
 
     //send stop
@@ -164,9 +165,8 @@ int start_parent(long children_num, const balance_t *balance) {
     if (send_result < 0) return ERROR;
 
     //wait all children are done
-    wait_result = wait_for_messages_from_everybody(&dst, DONE);
+    wait_result = wait_for_messages_from_everybody(&msg_tran, DONE);
     if (wait_result < 0) return ERROR;
-    close_left_pipe_ends(my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id]);
     write_events_log(buf, snprintf(buf, BUFFER_80, log_received_all_done_fmt, get_physical_time(), my_local_id));
 
     //get and print history
@@ -177,6 +177,7 @@ int start_parent(long children_num, const balance_t *balance) {
         wait(&status);
     }
 
+    close_left_pipe_ends(my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id]);
     close_log_files();
 
     return 0;
@@ -232,7 +233,7 @@ int wait_for_history_from_everybody(void *void_dest) {
 }
 
 int wait_for_messages_from_everybody(void *void_dest, MessageType supposed_type) {
-    struct msg_destination *dest = (struct msg_destination *) void_dest;
+    struct msg_transfer *dest = (struct msg_transfer *) void_dest;
     int received_declarations = 0;
     int received_process_nums[PROCESS_NUM] = {0};
     long waited_processes_num;
@@ -298,9 +299,11 @@ void close_specific_pipe_ends(int process_id, int pipe_read_ends[PROCESS_NUM][PR
             if (from != process_id) {
                 close(pipe_write_ends[from][to]);
                 write_pipe_log_close(from, to, pipe_write_ends[from][to], CLOSED_WRITE);
+                pipe_write_ends[from][to] = -777;
 
                 close(pipe_read_ends[from][to]);
                 write_pipe_log_close(from, to, pipe_read_ends[from][to], CLOSED_READ);
+                pipe_read_ends[from][to] = -777;
             }
         }
     }
@@ -317,6 +320,12 @@ int open_all_pipe_ends(int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_wr
                     return ERROR;
                 }
                 write_pipe_log_open(from, to, fd[0], fd[1]);
+
+                if (fcntl(fd[0], F_SETFL, fcntl(fd[0], F_GETFL) | O_NONBLOCK) < 0) {
+                    perror("fcntl");
+                    close_all_pipe_ends(pipe_read_ends, pipe_write_ends);
+                    return ERROR;
+                }
 
                 pipe_read_ends[to][from] = fd[0];
                 pipe_write_ends[from][to] = fd[1];
@@ -344,7 +353,7 @@ void write_pipe_log_close(int first, int second, int fd, enum pipe_log_type type
     if (type == CLOSED_WRITE)
         pattern = "Pipe's WRITE end from %d to %d was CLOSED. Number %d\n";
     else if (type == CLOSED_READ)
-        pattern = "%Pipe's READ end to %d from %d was CLOSED. Number %d\n";
+        pattern = "Pipe's READ end to %d from %d was CLOSED. Number %d\n";
 
     length = snprintf(message, sizeof(message), pattern,
                       first,
@@ -352,7 +361,7 @@ void write_pipe_log_close(int first, int second, int fd, enum pipe_log_type type
                       fd);
 
     ssize_t bytes_written = write(pipe_log_file, message, length);
-    printf("%s", message);
+    //printf("%s", message);
     if (bytes_written == -1) {
         printf("Couldn't write log for closing pipe between processes with local ids %d and %d\n", first, second);
     }
@@ -367,7 +376,7 @@ void write_pipe_log_open(int first, int second, int fd0, int fd1) {
                           fd0, fd1);
 
     ssize_t bytes_written = write(pipe_log_file, message, length);
-    printf("%s", message);
+    //printf("%s", message);
     if (bytes_written == -1) {
         printf("Couldn't write log for opening pipe between processes with local ids %d and %d\n", first, second);
     }
