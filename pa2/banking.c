@@ -2,8 +2,8 @@
 // Created by Ana Mun on 04.11.2023.
 //
 
-#include "./include/banking.h"
-#include "./include/process.h"
+#include "banking.h"
+#include "process.h"
 
 void transfer(void *parent_data, local_id src, local_id dst, balance_t amount) {
     struct msg_transfer* msg_tran = (struct msg_transfer*) parent_data;

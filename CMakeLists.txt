@@ -10,15 +10,15 @@ add_compile_options(
         -Wall)
 
 add_executable(lab1
-        include/common.h
-        include/ipc.h
-        include/pa2345.h
-        include/process.h
-        src/ipc.c
-        src/main.c
-        src/bank_robbery.c
-        src/process.c
-        src/banking.c)
+        pa2/common.h
+        pa2/ipc.h
+        pa2/pa2345.h
+        pa2/process.h
+        pa2/ipc.c
+        pa2/main.c
+        pa2/bank_robbery.c
+        pa2/process.c
+        pa2/banking.c)
 
 add_library(runtime SHARED IMPORTED)
 

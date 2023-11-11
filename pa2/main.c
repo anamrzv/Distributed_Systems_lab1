@@ -2,8 +2,8 @@
 // Created by Ana Mun on 17.09.2023.
 //
 
-#include "include/process.h"
-#include "include/banking.h"
+#include "process.h"
+#include "banking.h"
 
 
 int main(int argc, char *argv[]) {

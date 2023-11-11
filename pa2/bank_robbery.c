@@ -7,7 +7,7 @@
  * Students must not modify this file!
  */
 
-#include "include/banking.h"
+#include "banking.h"
 
 void bank_robbery(void * parent_data, local_id max_id)
 {

@@ -5,8 +5,8 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
-#include "include/ipc.h"
-#include "include/process.h"
+#include "ipc.h"
+#include "process.h"
 
 int send(void *void_source, local_id dst, const Message *msg) {
     struct msg_transfer *source = (struct msg_transfer *) void_source;
@@ -44,10 +44,8 @@ int receive(void *void_dest, local_id from, Message *msg) {
         case 0: // case 0 means all bytes are read and EOF
             return EMPTY_EOF;
         default:
-            if (msg->s_header.s_payload_len > 0) {
-                read_result = read(dest->read_ends[from], ((char*) msg) + sizeof(MessageHeader), msg->s_header.s_payload_len);
-                if (read_result < 0) return ERROR;
-            }
+            read_result = read(dest->read_ends[from], ((char*) msg) + sizeof(MessageHeader), msg->s_header.s_payload_len);
+            if (read_result < 0) return ERROR;
             return SUCCESS;
     }
 }
