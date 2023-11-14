@@ -35,6 +35,7 @@ int start_parent(long children_num, const balance_t *balance) {
             BalanceHistory my_local_balance_history;
             my_local_balance_history.s_id = (local_id) my_local_id;
             my_local_balance_history.s_history_len = 0;
+            update_history(&my_local_balance_history, my_local_balance);
 
             //write start to log
             char buf[BUFFER_80];
@@ -68,7 +69,7 @@ int start_parent(long children_num, const balance_t *balance) {
             int other_done_count = 0;
             int not_stopped = 1;
             TransferOrder *transferOrder;
-            while (other_done_count != processes_num - 3 || not_stopped != 0) {
+            while (other_done_count != processes_num - 2 || not_stopped != 0) {
                 receive_any(&msg_tran, declaration);
                 update_history(&my_local_balance_history, my_local_balance);
                 switch (declaration->s_header.s_type) {
@@ -108,8 +109,6 @@ int start_parent(long children_num, const balance_t *balance) {
                         declaration->s_header.s_payload_len = length;
 
                         int stop_result = send_multicast(&msg_tran, declaration);
-                        write_events_log(buf,
-                                         snprintf(buf, BUFFER_80, "%d sent stop to pipe write ends %d %d %d %d %d\n", my_local_id, pipe_write_ends[my_local_id][1], pipe_write_ends[my_local_id][2], pipe_write_ends[my_local_id][3], pipe_write_ends[my_local_id][4], pipe_write_ends[my_local_id][5]));
                         if (stop_result < 0) perror("send_multicast");
                         else write_events_log(buf,
                                               snprintf(buf, BUFFER_80, log_done_fmt, declaration->s_header.s_local_time, my_local_id,
@@ -117,8 +116,6 @@ int start_parent(long children_num, const balance_t *balance) {
                         break;
                     case DONE:
                         other_done_count++;
-                        write_events_log(buf,
-                                         snprintf(buf, BUFFER_80, "%d got done %s, other count - %d\n", my_local_id, declaration->s_payload, other_done_count));
                         break;
                     default:
                         perror("receive any");
@@ -133,15 +130,24 @@ int start_parent(long children_num, const balance_t *balance) {
             my_local_balance_history.s_history[my_local_balance_history.s_history_len].s_balance_pending_in = 0;
             my_local_balance_history.s_history_len++;
 
-            declaration->s_header.s_type = BALANCE_HISTORY;
-            declaration->s_header.s_local_time = get_physical_time();
-            declaration->s_header.s_payload_len = sizeof(BalanceHistory);
-            memcpy(declaration->s_payload, &my_local_balance_history, declaration->s_header.s_payload_len);
-            send(&msg_tran, PARENT_ID, declaration);
-            write_events_log(buf,snprintf(buf, BUFFER_80, "%d sent history\n", my_local_id));
+            Message *declaration2 = malloc(sizeof(Message));
+            declaration2->s_header.s_magic = MESSAGE_MAGIC;
+            declaration2->s_header.s_type = BALANCE_HISTORY;
+            declaration2->s_header.s_local_time = get_physical_time();
+            declaration2->s_header.s_payload_len = sizeof(BalanceHistory);
+            memcpy(declaration2->s_payload, &my_local_balance_history, declaration2->s_header.s_payload_len);
 
-            //close_left_pipe_ends(my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id]);
-            //free(declaration);
+            send(&msg_tran, PARENT_ID, declaration2);
+            write_events_log(buf,snprintf(buf, BUFFER_80, "%d sent history with last balance: \n", my_local_id));
+            for (int k = 0; k<my_local_balance_history.s_history_len; k++) {
+                write_events_log(buf,snprintf(buf, BUFFER_80, "%d| time %d balance %d \n", my_local_id, my_local_balance_history.s_history[k].s_time, my_local_balance_history.s_history[k].s_balance));
+            }
+            write_events_log(buf,snprintf(buf, BUFFER_80, "end history for %d \n", my_local_id));
+
+            close_left_pipe_ends(my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id]);
+            free(declaration);
+
+            write_events_log(buf, snprintf(buf, BUFFER_80, "%d almost finished\n", my_local_id));
 
             return 0;
         }
@@ -178,9 +184,18 @@ int start_parent(long children_num, const balance_t *balance) {
     //get and print history
     wait_for_history_from_everybody(&msg_tran);
 
+    int status;
+    for (size_t i = 0; i < children_num; i++) {
+        wait(&status);
+    }
+
+    write_events_log(buf, snprintf(buf, BUFFER_80, "parent waited for all children\n"));
+
     close_left_pipe_ends(my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id]);
-    close_log_files();
+    write_events_log(buf, snprintf(buf, BUFFER_80, "parent cosed logs\n"));
     free(declaration);
+    write_events_log(buf, snprintf(buf, BUFFER_80, "parent freed malloc\n"));
+    close_log_files();
 
     return 0;
 }
@@ -188,6 +203,10 @@ int start_parent(long children_num, const balance_t *balance) {
 void update_history(BalanceHistory* balance_history, balance_t cur_balance) {
     timestamp_t curr_time = get_physical_time();
 
+//    for (timestamp_t i = balance_history->s_history_len; i < curr_time; i++) {
+//        BalanceState balance_state = {.s_time = i, .s_balance = cur_balance, .s_balance_pending_in = 0};
+//        balance_history->s_history[balance_history->s_history_len + 1] = balance_state;
+//    }
     for (timestamp_t i = balance_history->s_history_len; i < curr_time; ++i) {
         BalanceState* balance_state = balance_history->s_history + i;
         balance_state->s_time = i;
@@ -201,16 +220,17 @@ int wait_for_history_from_everybody(void *void_dest) {
     int received_declarations = 0;
     int received_process_nums[PROCESS_NUM] = {0};
     long waited_processes_num = processes_num - 1;
-    Message *answer = malloc(sizeof(Message));
-    BalanceHistory balance_history;
-    AllHistory all_history;
-    all_history.s_history_len = waited_processes_num;
+    Message* answer = malloc(MAX_MESSAGE_LEN);
+    AllHistory* all_history = calloc(1, sizeof(AllHistory));
+    all_history->s_history_len = waited_processes_num;
     char buf[BUFFER_80];
+    write_events_log(buf, snprintf(buf, BUFFER_80, "waited process num: %ld\n", waited_processes_num));
     while (received_declarations != waited_processes_num) {
         for (int waited_proc_id = 1; waited_proc_id < processes_num; waited_proc_id++) {
             write_events_log(buf, snprintf(buf, BUFFER_80, "received declarations number: %d\n", received_declarations));
             if (received_declarations == waited_processes_num) break;
             if (received_process_nums[waited_proc_id] == 1) continue; //msg was already read
+            memset(answer, 0, MAX_MESSAGE_LEN);
             int result = receive(void_dest, (local_id) waited_proc_id, answer);
             switch (result) {
                 case SUCCESS:
@@ -218,10 +238,22 @@ int wait_for_history_from_everybody(void *void_dest) {
                         write_events_log(buf, snprintf(buf, BUFFER_80, "received history from %d\n", waited_proc_id));
                         received_declarations += 1;
                         received_process_nums[waited_proc_id] = 1;
-                        memcpy((void *) &balance_history, answer->s_payload,
-                               sizeof(char) * answer->s_header.s_payload_len);
-                        all_history.s_history[waited_proc_id - 1] = balance_history;
+                        //memcpy(&all_history->s_history[waited_proc_id - 1], answer->s_payload, sizeof(BalanceHistory));
+
+                        BalanceHistory* sub_history = all_history->s_history + (waited_proc_id - 1);
+                        BalanceHistory* msg_history = (BalanceHistory*) answer->s_payload;
+
+                        sub_history->s_history_len = msg_history->s_history_len;
+                        sub_history->s_id = msg_history->s_id;
+
+                        for (size_t i = 0; i < sub_history->s_history_len; i++)
+                            sub_history->s_history[i] = msg_history->s_history[i];
+
+                        for (int k = 0; k<all_history->s_history[waited_proc_id - 1].s_history_len; k++) {
+                            write_events_log(buf,snprintf(buf, BUFFER_80, "in parent %d| time %d balance %d \n", waited_proc_id, all_history->s_history[waited_proc_id - 1].s_history[k].s_time, all_history->s_history[waited_proc_id - 1].s_history[k].s_balance));
+                        }
                         break;
+
                     } else break;
                 case EMPTY:
                     sleep(1);
@@ -233,7 +265,10 @@ int wait_for_history_from_everybody(void *void_dest) {
             }
         }
     }
-    print_history(&all_history);
+    write_events_log(buf, snprintf(buf, BUFFER_80, "parent left waiting history cycle\n"));
+    print_history(all_history);
+    write_events_log(buf, snprintf(buf, BUFFER_80, "parent printed history in terminal\n"));
+
     free(answer);
     return SUCCESS;
 }
@@ -328,7 +363,7 @@ int open_all_pipe_ends(int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_wr
                 }
                 write_pipe_log_open(from, to, fd[0], fd[1]);
 
-                if (fcntl(fd[0], F_SETFL, fcntl(fd[0], F_GETFL) | O_NONBLOCK) < 0) {
+                if (fcntl(fd[0], F_SETFL, fcntl(fd[0], F_GETFL) | O_NONBLOCK) < 0 || fcntl(fd[1], F_SETFL, fcntl(fd[1], F_GETFL) | O_NONBLOCK) < 0) {
                     perror("fcntl");
                     close_all_pipe_ends(pipe_read_ends, pipe_write_ends);
                     return ERROR;
@@ -368,7 +403,7 @@ void write_pipe_log_close(int first, int second, int fd, enum pipe_log_type type
                       fd);
 
     ssize_t bytes_written = write(pipe_log_file, message, length);
-    printf("%s", message);
+    //printf("%s", message);
     if (bytes_written == -1) {
         printf("Couldn't write log for closing pipe between processes with local ids %d and %d\n", first, second);
     }
@@ -383,7 +418,7 @@ void write_pipe_log_open(int first, int second, int fd0, int fd1) {
                           fd0, fd1);
 
     ssize_t bytes_written = write(pipe_log_file, message, length);
-    printf("%s", message);
+    //printf("%s", message);
     if (bytes_written == -1) {
         printf("Couldn't write log for opening pipe between processes with local ids %d and %d\n", first, second);
     }
