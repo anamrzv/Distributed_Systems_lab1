@@ -57,5 +57,6 @@ void close_specific_pipe_ends(int process_id, int pipe_read_ends[PROCESS_NUM][PR
 void close_log_files(void);
 void open_log_files(void);
 void update_history(BalanceHistory *history, balance_t amount);
+void calc_timestamp(timestamp_t external_timestamp, timestamp_t internal_counter);
 
 #endif //LAB1_PROCESS_H

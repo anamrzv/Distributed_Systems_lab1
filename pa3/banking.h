@@ -64,7 +64,7 @@ typedef struct {
 // Functions below must be implemented by students
 //------------------------------------------------------------------------------
 
-/** Transfer amount from pa2 to dst.
+/** Transfer amount from pa3 to dst.
  *
  * @param parent_data Any data structure implemented by students to perform I/O
  */
