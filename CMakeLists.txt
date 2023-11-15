@@ -18,7 +18,7 @@ add_executable(lab1
         pa2/main.c
         pa2/bank_robbery.c
         pa2/process.c
-        pa2/banking.c)
+       )
 
 add_library(runtime SHARED IMPORTED)
 

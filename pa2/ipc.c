@@ -59,13 +59,10 @@ int receive_any(void *void_dest, Message *msg) {
             switch (result) {
                 case SUCCESS:
                     return SUCCESS;
-                case EMPTY:
-                    sleep(1);
-                    continue;
-                case EMPTY_EOF:
-                    continue;
-                default:
+                case ERROR:
                     return ERROR;
+                default:
+                    break;
             }
         }
     }

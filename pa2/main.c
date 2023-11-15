@@ -26,6 +26,7 @@ int main(int argc, char *argv[]) {
         }
         start_parent(num_of_child_proc, balance);
     }
+    return 0;
 }
 
 

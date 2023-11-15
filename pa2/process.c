@@ -202,11 +202,6 @@ int start_parent(long children_num, const balance_t *balance) {
 
 void update_history(BalanceHistory* balance_history, balance_t cur_balance) {
     timestamp_t curr_time = get_physical_time();
-
-//    for (timestamp_t i = balance_history->s_history_len; i < curr_time; i++) {
-//        BalanceState balance_state = {.s_time = i, .s_balance = cur_balance, .s_balance_pending_in = 0};
-//        balance_history->s_history[balance_history->s_history_len + 1] = balance_state;
-//    }
     for (timestamp_t i = balance_history->s_history_len; i < curr_time; ++i) {
         BalanceState* balance_state = balance_history->s_history + i;
         balance_state->s_time = i;
@@ -238,30 +233,14 @@ int wait_for_history_from_everybody(void *void_dest) {
                         write_events_log(buf, snprintf(buf, BUFFER_80, "received history from %d\n", waited_proc_id));
                         received_declarations += 1;
                         received_process_nums[waited_proc_id] = 1;
-                        //memcpy(&all_history->s_history[waited_proc_id - 1], answer->s_payload, sizeof(BalanceHistory));
-
-                        BalanceHistory* sub_history = all_history->s_history + (waited_proc_id - 1);
-                        BalanceHistory* msg_history = (BalanceHistory*) answer->s_payload;
-
-                        sub_history->s_history_len = msg_history->s_history_len;
-                        sub_history->s_id = msg_history->s_id;
-
-                        for (size_t i = 0; i < sub_history->s_history_len; i++)
-                            sub_history->s_history[i] = msg_history->s_history[i];
-
-                        for (int k = 0; k<all_history->s_history[waited_proc_id - 1].s_history_len; k++) {
-                            write_events_log(buf,snprintf(buf, BUFFER_80, "in parent %d| time %d balance %d \n", waited_proc_id, all_history->s_history[waited_proc_id - 1].s_history[k].s_time, all_history->s_history[waited_proc_id - 1].s_history[k].s_balance));
-                        }
+                        memcpy(&all_history->s_history[waited_proc_id - 1], answer->s_payload, sizeof(BalanceHistory));
                         break;
 
                     } else break;
-                case EMPTY:
-                    sleep(1);
-                    break;
-                case EMPTY_EOF:
-                    break;
-                default:
+                case ERROR:
                     return ERROR;
+                default:
+                    break;
             }
         }
     }
