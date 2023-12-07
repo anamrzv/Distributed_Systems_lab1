@@ -14,8 +14,10 @@ int send(void *void_source, local_id dst, const Message *msg) {
     struct msg_transfer *source = (struct msg_transfer *) void_source;
     ssize_t written_bytes = write(source->write_ends[dst], msg,
                                   (ssize_t) (sizeof(MessageHeader) + msg->s_header.s_payload_len));
+    //printf("try to send from %d to %d via %d result %zd\n", source->id, dst, source->write_ends[dst], written_bytes);
     if (written_bytes < 0) {
-        perror("write");
+        perror("write kek");
+
         return ERROR;
     } else {
         return SUCCESS;
@@ -44,7 +46,7 @@ int receive(void *void_dest, local_id from, Message *msg) {
                 return ERROR;
             }
         case 0: // case 0 means all bytes are read and EOF
-            return EMPTY_EOF;
+            return SUCCESS;
         default:
             read_result = read(dest->read_ends[from], ((char*) msg) + sizeof(MessageHeader), msg->s_header.s_payload_len);
             if (read_result < 0) return ERROR;

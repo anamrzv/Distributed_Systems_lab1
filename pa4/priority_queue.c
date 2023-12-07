@@ -3,6 +3,7 @@
 //
 
 #include "priority_queue.h"
+#include <stdio.h>
 
 Node* new_node(local_id pid, timestamp_t ts) {
     Node* temp = (Node*) malloc(sizeof(Node));
@@ -16,12 +17,17 @@ Node* peek(Node** head) { return *head; }
 
 void pop_by_pid(Node** head, local_id pid) {
     Node* start = *head;
-    while (start->next != NULL && start->next->pid != pid) {
-        start = start->next;
+    if (start->pid == pid) {
+        (*head) = start->next;
+        free(start);
+    } else {
+        while (start->next != NULL && start->next->pid != pid) {
+            start = start->next;
+        }
+        Node* to_delete = start->next;
+        start->next = start->next->next;
+        free(to_delete);
     }
-    Node* to_delete = start->next;
-    start->next = start->next->next;
-    free(to_delete);
 }
 
 void push(Node** head, local_id pid, timestamp_t ts) {

@@ -24,4 +24,4 @@ add_library(runtime SHARED IMPORTED)
 
 set_target_properties(runtime PROPERTIES IMPORTED_LOCATION ../lib64/libruntime.so)
 
-#target_link_libraries(Distributed_Systems_lab1 runtime)
+target_link_libraries(Distributed_Systems_lab1 runtime)
