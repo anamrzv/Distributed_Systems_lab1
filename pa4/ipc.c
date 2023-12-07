@@ -8,6 +8,8 @@
 #include "ipc.h"
 #include "process.h"
 
+local_id last_sender_id;
+
 int send(void *void_source, local_id dst, const Message *msg) {
     struct msg_transfer *source = (struct msg_transfer *) void_source;
     ssize_t written_bytes = write(source->write_ends[dst], msg,
@@ -58,6 +60,7 @@ int receive_any(void *void_dest, Message *msg) {
             int result = receive(dest, (local_id) waited_proc_id, msg);
             switch (result) {
                 case SUCCESS:
+                    last_sender_id = (local_id) waited_proc_id;
                     return SUCCESS;
                 case ERROR:
                     return ERROR;

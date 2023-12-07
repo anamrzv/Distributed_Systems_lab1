@@ -3,19 +3,25 @@
 //
 
 #include "process.h"
+#include "priority_queue.h"
 
 int pipe_log_file;
 int events_log_file;
 
 long processes_num;
 timestamp_t my_current_timestamp;
+int requesting = 0;
+int accessing_critical_section = 0;
+Node* my_priority_queue = NULL;
+extern local_id last_sender_id;
+int received_done = 0;
 
-int start_parent(long children_num, const balance_t *balance) {
+int start_parent(long children_num, int mutex_mode) {
     open_log_files();
 
     my_current_timestamp = 0;
     processes_num = children_num + 1;
-    int my_local_id = PARENT_ID;
+    local_id my_local_id = PARENT_ID;
 
     int pipe_write_ends[PROCESS_NUM][PROCESS_NUM] = {{0}};
     int pipe_read_ends[PROCESS_NUM][PROCESS_NUM] = {{0}};
@@ -30,19 +36,13 @@ int start_parent(long children_num, const balance_t *balance) {
             close_all_pipe_ends(pipe_read_ends, pipe_write_ends);
             return -1;
         } else if (child_pid == 0) { // child process
-            my_local_id = i;
+            my_local_id = (local_id ) i;
             my_current_timestamp++;
             timestamp_t start_time = get_lamport_time();
 
-            balance_t my_local_balance = balance[i - 1];
-            BalanceHistory my_local_balance_history;
-            my_local_balance_history.s_id = (local_id) my_local_id;
-            my_local_balance_history.s_history_len = 0;
-
             //write start to log
             char buf[BUFFER_80];
-            write_events_log(buf, snprintf(buf, 80, log_started_fmt, start_time, my_local_id, getpid(), getppid(),
-                                           my_local_balance));
+            write_events_log(buf,snprintf(buf, BUFFER_80, log_started_fmt, start_time, my_local_id, getpid(), getppid(), 0));
 
             //leave only its ends
             close_specific_pipe_ends(my_local_id, pipe_read_ends, pipe_write_ends);
@@ -52,8 +52,8 @@ int start_parent(long children_num, const balance_t *balance) {
             declaration->s_header.s_magic = MESSAGE_MAGIC;
             declaration->s_header.s_type = STARTED;
             declaration->s_header.s_local_time = start_time;
-            int length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_started_fmt, start_time,
-                                  my_local_id, getpid(), getppid(), my_local_balance);
+            int length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_started_fmt, start_time, my_local_id,
+                                  getpid(), getppid(), 0);
             declaration->s_header.s_payload_len = length;
             struct msg_transfer msg_tran = {my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id],
                                             processes_num};
@@ -63,92 +63,34 @@ int start_parent(long children_num, const balance_t *balance) {
             //receive "starts" from others
             int wait_result = wait_for_messages_from_everybody(&msg_tran, STARTED); //updated time
             if (wait_result < 0) return -1;
-            write_events_log(buf,
-                             snprintf(buf, BUFFER_80, log_received_all_started_fmt, get_lamport_time(), my_local_id));
+            write_events_log(buf,snprintf(buf, BUFFER_80, log_received_all_started_fmt, get_lamport_time(), my_local_id));
 
-            //receive transfer, stop
-            int other_done_count = 0;
-            int not_stopped = 1;
-            TransferOrder *transferOrder;
-            while (other_done_count != processes_num - 2 || not_stopped != 0) {
-                receive_any(&msg_tran, declaration);
-                calc_timestamp(declaration->s_header.s_local_time, my_current_timestamp);
-                update_history(&my_local_balance_history, my_local_balance);
-                switch (declaration->s_header.s_type) {
-                    case TRANSFER:
-                        transferOrder = (TransferOrder *) declaration->s_payload;
-                        if (transferOrder->s_src == my_local_id) {
-                            my_local_balance -= transferOrder->s_amount;
-                            my_current_timestamp++;
-                            declaration->s_header.s_local_time = get_lamport_time();
-                            int send_result = send(&msg_tran, transferOrder->s_dst, declaration);
-                            if (send_result == 0) {
-                                write_events_log(buf, snprintf(buf, 80, log_transfer_out_fmt, get_lamport_time(),
-                                                               transferOrder->s_src,
-                                                               transferOrder->s_amount, transferOrder->s_dst));
-                            }
-                            else perror("send");
-                        } else if (transferOrder->s_dst == my_local_id) {
-                            my_local_balance += transferOrder->s_amount;
-                            write_events_log(buf, snprintf(buf, 80, log_transfer_in_fmt, get_lamport_time(),
-                                                           transferOrder->s_dst,
-                                                           transferOrder->s_amount, transferOrder->s_src));
-                            for (timestamp_t t = (timestamp_t) (declaration->s_header.s_local_time - 1); t < get_lamport_time(); t++)
-                                my_local_balance_history.s_history[t].s_balance_pending_in += transferOrder->s_amount;
-                            my_current_timestamp++;
-                            Message acknowledgment;
-                            acknowledgment.s_header.s_type = ACK;
-                            acknowledgment.s_header.s_magic = MESSAGE_MAGIC;
-                            acknowledgment.s_header.s_payload_len = 0;
-                            acknowledgment.s_header.s_local_time = get_lamport_time();
-                            int send_result = send(&msg_tran, PARENT_ID, &acknowledgment);
-                            if (send_result < 0) perror("send");
-                        }
-                        break;
-                    case STOP:
-                        not_stopped = 0;
-                        my_current_timestamp++;
-                        declaration->s_header.s_type = DONE;
-                        declaration->s_header.s_magic = MESSAGE_MAGIC;
-                        declaration->s_header.s_local_time = get_lamport_time();
-                        length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_done_fmt, declaration->s_header.s_local_time,
-                                          my_local_id,
-                                          my_local_balance);
-                        declaration->s_header.s_payload_len = length;
-
-                        int stop_result = send_multicast(&msg_tran, declaration);
-                        if (stop_result < 0) perror("send_multicast");
-                        else write_events_log(buf,
-                                              snprintf(buf, BUFFER_80, log_done_fmt, declaration->s_header.s_local_time, my_local_id,
-                                                       my_local_balance));
-                        break;
-                    case DONE:
-                        other_done_count++;
-                        break;
-                    default:
-                        perror("receive any");
-                }
+            //critical section
+            for (int jobs = 1; jobs <= my_local_id * 5; jobs++) {
+                snprintf(buf, BUFFER_80, log_loop_operation_fmt, my_local_id, jobs, my_local_id * 5);
+                if (mutex_mode) {
+                    request_cs(&msg_tran);
+                    print(buf);
+                    release_cs(&msg_tran);
+                } else print(buf);
             }
 
-            //got other done
-            write_events_log(buf,snprintf(buf, BUFFER_80, log_received_all_done_fmt, get_lamport_time(), my_local_id));
-
-            my_local_balance_history.s_history[my_local_balance_history.s_history_len].s_time = my_local_balance_history.s_history_len;
-            my_local_balance_history.s_history[my_local_balance_history.s_history_len].s_balance = my_local_balance;
-            my_local_balance_history.s_history[my_local_balance_history.s_history_len].s_balance_pending_in = 0;
-            my_local_balance_history.s_history_len++;
-
+            //send done
             my_current_timestamp++;
-            Message *declaration2 = malloc(sizeof(Message));
-            declaration2->s_header.s_magic = MESSAGE_MAGIC;
-            declaration2->s_header.s_type = BALANCE_HISTORY;
-            declaration2->s_header.s_local_time = get_lamport_time();
-            declaration2->s_header.s_payload_len = sizeof(BalanceHistory);
-            memcpy(declaration2->s_payload, &my_local_balance_history, declaration2->s_header.s_payload_len);
-            send(&msg_tran, PARENT_ID, declaration2);
+            declaration->s_header.s_type = DONE;
+            declaration->s_header.s_local_time = get_lamport_time();
+            length = snprintf(declaration->s_payload, MAX_PAYLOAD_LEN, log_done_fmt, get_lamport_time(), my_local_id, 0);
+            declaration->s_header.s_payload_len = length;
+            int done_result = send_multicast(&msg_tran, declaration);
+            if (done_result < 0) return -1;
+
+            //got other done
+            wait_result = wait_for_messages_from_everybody(&msg_tran, DONE);
+            if (wait_result < 0) return ERROR;
+            write_events_log(buf, snprintf(buf, BUFFER_80, log_received_all_done_fmt, get_lamport_time(), my_local_id));
+
             close_left_pipe_ends(my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id]);
             free(declaration);
-
             return 0;
         }
     }
@@ -159,12 +101,9 @@ int start_parent(long children_num, const balance_t *balance) {
     //wait all children are started
     char buf[BUFFER_80];
     struct msg_transfer msg_tran = {my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id], processes_num};
-    int wait_result = wait_for_messages_from_everybody(&msg_tran, STARTED); //updated
+    int wait_result = wait_for_messages_from_everybody(&msg_tran, STARTED);
     if (wait_result < 0) return ERROR;
     write_events_log(buf, snprintf(buf, BUFFER_80, log_received_all_started_fmt, get_lamport_time(), my_local_id));
-
-    //bank robbery
-    bank_robbery(&msg_tran, (local_id) children_num); //updated
 
     //send stop
     my_current_timestamp++;
@@ -177,12 +116,11 @@ int start_parent(long children_num, const balance_t *balance) {
     if (send_result < 0) return ERROR;
 
     //wait all children are done
-    wait_result = wait_for_messages_from_everybody(&msg_tran, DONE); //updated
-    if (wait_result < 0) return ERROR;
+    while (received_done != processes_num - 2) {
+        receive_any(&msg_tran, declaration);
+        if (declaration->s_header.s_type == DONE) received_done++;
+    }
     write_events_log(buf, snprintf(buf, BUFFER_80, log_received_all_done_fmt, get_lamport_time(), my_local_id));
-
-    //get and print history
-    wait_for_history_from_everybody(&msg_tran);
 
     while (wait(NULL) > 0);
 
@@ -193,50 +131,67 @@ int start_parent(long children_num, const balance_t *balance) {
     return 0;
 }
 
-void update_history(BalanceHistory* balance_history, balance_t cur_balance) {
-    timestamp_t curr_time = get_lamport_time();
-    for (timestamp_t i = balance_history->s_history_len; i < curr_time; ++i) {
-        BalanceState* balance_state = balance_history->s_history + i;
-        balance_state->s_time = i;
-        balance_state->s_balance = cur_balance;
-        balance_state->s_balance_pending_in = 0;
-    }
-    balance_history->s_history_len = curr_time;
-}
+int request_cs(const void* void_transfer_struct) {
+    requesting = 1;
+    struct msg_transfer *transfer_struct = (struct msg_transfer *) void_transfer_struct;
 
-int wait_for_history_from_everybody(void *void_dest) {
-    int received_declarations = 0;
-    int received_process_nums[PROCESS_NUM] = {0};
-    long waited_processes_num = processes_num - 1;
-    Message* answer = malloc(MAX_MESSAGE_LEN);
-    AllHistory* all_history = calloc(1, sizeof(AllHistory));
-    all_history->s_history_len = waited_processes_num;
-    while (received_declarations != waited_processes_num) {
-        for (int waited_proc_id = 1; waited_proc_id < processes_num; waited_proc_id++) {
-            if (received_declarations == waited_processes_num) break;
-            if (received_process_nums[waited_proc_id] == 1) continue; //msg was already read
-            memset(answer, 0, MAX_MESSAGE_LEN);
-            int result = receive(void_dest, (local_id) waited_proc_id, answer);
-            switch (result) {
-                case SUCCESS:
-                    if (answer->s_header.s_type == BALANCE_HISTORY) {
-                        received_declarations += 1;
-                        received_process_nums[waited_proc_id] = 1;
-                        calc_timestamp(answer->s_header.s_local_time, my_current_timestamp);
-                        memcpy(&all_history->s_history[waited_proc_id - 1], answer->s_payload, sizeof(BalanceHistory));
-                        break;
-                    } else break;
-                case ERROR:
-                    return ERROR;
-                default:
-                    break;
-            }
+    push(&my_priority_queue, transfer_struct->id, get_lamport_time());
+
+    my_current_timestamp++;
+    Message *declaration = malloc(sizeof(Message));
+    declaration->s_header.s_magic = MESSAGE_MAGIC;
+    declaration->s_header.s_type = CS_REQUEST;
+    declaration->s_header.s_local_time = get_lamport_time();
+    declaration->s_header.s_payload_len = 0;
+    int result = send_multicast(transfer_struct, declaration);
+    if (result < 0) return ERROR;
+
+    int replies = 0;
+    while (replies != processes_num - 2 || peek(&my_priority_queue)->pid != transfer_struct->id) {
+        receive_any(&transfer_struct, declaration);
+        calc_timestamp(declaration->s_header.s_local_time, my_current_timestamp);
+        switch (declaration->s_header.s_type) {
+            case CS_REQUEST:
+                push(&my_priority_queue, last_sender_id, declaration->s_header.s_local_time);
+                declaration->s_header.s_local_time = get_lamport_time();
+                declaration->s_header.s_type = CS_REPLY;
+                result = send_multicast(transfer_struct, declaration);
+                if (result < 0) return ERROR;
+            case CS_REPLY:
+                replies++;
+                break;
+            case CS_RELEASE:
+                pop_by_pid(&my_priority_queue, last_sender_id);
+                break;
+            case DONE:
+                received_done++;
+                break;
         }
     }
-    print_history(all_history);
-    free(answer);
+    accessing_critical_section = 1;
+    free(declaration);
     return SUCCESS;
 }
+
+int release_cs(const void* void_transfer_struct) {
+    struct msg_transfer *transfer_struct = (struct msg_transfer *) void_transfer_struct;
+    accessing_critical_section = 0;
+    requesting = 0;
+
+    pop_by_pid(&my_priority_queue, transfer_struct->id);
+
+    my_current_timestamp++;
+    Message *declaration = malloc(sizeof(Message));
+    declaration->s_header.s_magic = MESSAGE_MAGIC;
+    declaration->s_header.s_type = CS_RELEASE;
+    declaration->s_header.s_local_time = get_lamport_time();
+    declaration->s_header.s_payload_len = 0;
+    int result = send_multicast(transfer_struct, declaration);
+    if (result < 0) return ERROR;
+    free(declaration);
+    return SUCCESS;
+}
+
 
 int wait_for_messages_from_everybody(void *void_dest, MessageType supposed_type) {
     struct msg_transfer *dest = (struct msg_transfer *) void_dest;
@@ -330,7 +285,8 @@ int open_all_pipe_ends(int pipe_read_ends[PROCESS_NUM][PROCESS_NUM], int pipe_wr
                 }
                 write_pipe_log_open(from, to, fd[0], fd[1]);
 
-                if (fcntl(fd[0], F_SETFL, fcntl(fd[0], F_GETFL) | O_NONBLOCK) < 0 || fcntl(fd[1], F_SETFL, fcntl(fd[1], F_GETFL) | O_NONBLOCK) < 0) {
+                if (fcntl(fd[0], F_SETFL, fcntl(fd[0], F_GETFL) | O_NONBLOCK) < 0 ||
+                    fcntl(fd[1], F_SETFL, fcntl(fd[1], F_GETFL) | O_NONBLOCK) < 0) {
                     perror("fcntl");
                     close_all_pipe_ends(pipe_read_ends, pipe_write_ends);
                     return ERROR;
@@ -425,24 +381,3 @@ void calc_timestamp(timestamp_t external_timestamp, timestamp_t internal_counter
     else my_current_timestamp = (timestamp_t) (internal_counter + 1);
 }
 
-void transfer(void *parent_data, local_id src, local_id dst, balance_t amount) {
-    struct msg_transfer* msg_tran = (struct msg_transfer*) parent_data;
-
-    my_current_timestamp++;
-    Message *declaration = malloc(sizeof(Message));
-    declaration->s_header.s_magic = MESSAGE_MAGIC;
-    declaration->s_header.s_type = TRANSFER;
-    declaration->s_header.s_local_time = get_lamport_time();
-    declaration->s_header.s_payload_len = sizeof(TransferOrder);
-    TransferOrder transferOrder = {.s_src = src, .s_dst = dst, .s_amount = amount};
-    memcpy(&(declaration->s_payload), &transferOrder, sizeof(TransferOrder));
-    int send_result = send(parent_data, src, declaration);
-    if (send_result > ERROR) {
-        while (receive(msg_tran, dst, declaration) != 0 || declaration->s_header.s_type != ACK);
-        calc_timestamp(declaration->s_header.s_local_time, my_current_timestamp);
-    } else {
-        perror("send");
-        printf("transfer() failed: could not sent msg to source process %d\n", src);
-        exit(1);
-    }
-}

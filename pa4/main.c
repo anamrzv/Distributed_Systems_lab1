@@ -3,8 +3,6 @@
 //
 
 #include "process.h"
-#include "banking.h"
-
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
@@ -20,11 +18,9 @@ int main(int argc, char *argv[]) {
         printf("Непредусмотренное число процессов\n");
         return -1;
     } else {
-        balance_t balance[num_of_child_proc];
-        for (int i = 3; i < argc; i++) {
-            balance[i - 3] = (int16_t) strtol(argv[i], NULL, 10);
-        }
-        start_parent(num_of_child_proc, balance);
+        if (argc == 4 && strcmp(argv[3], "--mutexl") == 0) {
+            start_parent(num_of_child_proc, 1);
+        } else start_parent(num_of_child_proc, 0);
     }
     return 0;
 }
