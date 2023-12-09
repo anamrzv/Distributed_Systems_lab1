@@ -2,6 +2,7 @@
 // Created by Ana Mun on 17.09.2023.
 //
 
+#include <getopt.h>
 #include "process.h"
 
 int main(int argc, char *argv[]) {
@@ -10,19 +11,36 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    char *p;
-    errno = 0;
-    long num_of_child_proc = strtol(argv[2], &p, 10);
+    const char *shortOptions = "p:";
+    char *num_of_processes = 0;
+    int mutex_flag = 0;
 
-    if (errno != 0 || *p != '\0' || num_of_child_proc > MAX_PROCESS_ID || num_of_child_proc < 1) {
+    struct option long_options[] = {
+            {"mutexl", 0, &mutex_flag, 1},
+            {NULL,     0, NULL,        0}
+    };
+
+    int rez;
+    while ((rez = getopt_long(argc, argv, shortOptions, long_options, NULL)) != -1) {
+        switch (rez) {
+            case 'p':
+                num_of_processes = optarg;
+                break;
+            case '?':
+                printf("Неизвестная опция\n");
+                break;
+            default:
+                break;
+        }
+    }
+
+    char *p;
+    long conv = strtol(num_of_processes, &p, 10);
+    if (conv < 1 || conv > MAX_PROCESS_ID) {
         printf("Непредусмотренное число процессов\n");
         return -1;
-    } else {
-        if (argc == 4 && strcmp(argv[3], "--mutexl") == 0) {
-            start_parent(num_of_child_proc, 1);
-        } else start_parent(num_of_child_proc, 0);
     }
-    return 0;
+
+    start_parent(conv, mutex_flag);
+
 }
-
-

@@ -16,8 +16,7 @@ int send(void *void_source, local_id dst, const Message *msg) {
                                   (ssize_t) (sizeof(MessageHeader) + msg->s_header.s_payload_len));
     //printf("try to send from %d to %d via %d result %zd\n", source->id, dst, source->write_ends[dst], written_bytes);
     if (written_bytes < 0) {
-        perror("write kek");
-
+        perror("write");
         return ERROR;
     } else {
         return SUCCESS;

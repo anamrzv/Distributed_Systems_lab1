@@ -43,7 +43,7 @@ int start_parent(long children_num, int mutex_mode) {
             write_events_log(buf,snprintf(buf, BUFFER_80, log_started_fmt, start_time, my_local_id, getpid(), getppid(), 0));
 
             //leave only its ends
-            //close_specific_pipe_ends(my_local_id, pipe_read_ends, pipe_write_ends);
+            close_specific_pipe_ends(my_local_id, pipe_read_ends, pipe_write_ends);
 
             //send start
             Message *declaration = malloc(sizeof(Message));
@@ -65,12 +65,16 @@ int start_parent(long children_num, int mutex_mode) {
 
             //critical section
             for (int jobs = 1; jobs <= my_local_id * 5; jobs++) {
-                snprintf(buf, BUFFER_80, log_loop_operation_fmt, my_local_id, jobs, my_local_id * 5);
-                if (mutex_mode) {
+                char buffer[80] = {0};
+                snprintf(buffer, BUFFER_80, log_loop_operation_fmt, my_local_id, jobs, my_local_id * 5);
+                if (mutex_mode == 1) {
                     request_cs(&msg_tran);
-                    print(buf);
+                    print(buffer);
                     release_cs(&msg_tran);
-                } else print(buf);
+                } else {
+                    print(buffer);
+                    //printf("process %d wrote iteration %d\n",my_local_id,jobs);
+                }
             }
 
             //send done
@@ -88,7 +92,7 @@ int start_parent(long children_num, int mutex_mode) {
                 calc_timestamp(declaration->s_header.s_local_time, my_current_timestamp);
                 switch (declaration->s_header.s_type) {
                     case CS_REQUEST:
-                        printf("process %d received request from %d\n", my_local_id, last_sender_id);
+                        //printf("process %d received request from %d\n", my_local_id, last_sender_id);
                         push(&my_priority_queue, last_sender_id, declaration->s_header.s_local_time);
                         declaration->s_header.s_local_time = get_lamport_time();
                         declaration->s_header.s_type = CS_REPLY;
@@ -103,14 +107,14 @@ int start_parent(long children_num, int mutex_mode) {
             }
             write_events_log(buf, snprintf(buf, BUFFER_80, log_received_all_done_fmt, get_lamport_time(), my_local_id));
 
-            //close_left_pipe_ends(my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id]);
+            close_left_pipe_ends(my_local_id, pipe_write_ends[my_local_id], pipe_read_ends[my_local_id]);
             free(declaration);
             return 0;
         }
     }
 
     //leave only its ends
-    //close_specific_pipe_ends(my_local_id, pipe_read_ends, pipe_write_ends);
+    close_specific_pipe_ends(my_local_id, pipe_read_ends, pipe_write_ends);
 
     //wait all children are started
     char buf[BUFFER_80];
@@ -143,10 +147,10 @@ int request_cs(const void* void_transfer_struct) {
     declaration->s_header.s_payload_len = 0;
     int result = send_multicast(transfer_struct, declaration);
     if (result < 0) return ERROR;
-    printf("process %d send request\n", transfer_struct->id);
+    //printf("process %d send request\n", transfer_struct->id);
 
     push(&my_priority_queue, transfer_struct->id, get_lamport_time());
-    printf("process %d pushed\n", transfer_struct->id);
+    //printf("process %d pushed\n", transfer_struct->id);
 
     int replies = 0;
     while (replies != processes_num - 2 || peek(&my_priority_queue)->pid != transfer_struct->id) {
@@ -154,24 +158,24 @@ int request_cs(const void* void_transfer_struct) {
         calc_timestamp(declaration->s_header.s_local_time, my_current_timestamp);
         switch (declaration->s_header.s_type) {
             case CS_REQUEST:
-                printf("process %d received request from %d\n", transfer_struct->id, last_sender_id);
+                //printf("process %d received request from %d\n", transfer_struct->id, last_sender_id);
                 push(&my_priority_queue, last_sender_id, declaration->s_header.s_local_time);
                 declaration->s_header.s_local_time = get_lamport_time();
                 declaration->s_header.s_type = CS_REPLY;
+                my_current_timestamp++;
                 result = send(transfer_struct, last_sender_id, declaration);
                 if (result < 0) return ERROR;
                 break;
             case CS_REPLY:
-                printf("process %d received reply from %d\n", transfer_struct->id, last_sender_id);
+                //printf("process %d received reply from %d\n", transfer_struct->id, last_sender_id);
                 replies++;
                 break;
             case CS_RELEASE:
-                printf("process %d received release from %d. top was %d\n", transfer_struct->id, last_sender_id, peek(&my_priority_queue)->pid);
+                //printf("process %d received release from %d. top was %d\n", transfer_struct->id, last_sender_id, peek(&my_priority_queue)->pid);
                 pop_by_pid(&my_priority_queue, last_sender_id);
-                printf("process %d popped, top is %d, replies are %d\n", transfer_struct->id, peek(&my_priority_queue)->pid, replies);
+                //printf("process %d popped, top is %d, replies are %d\n", transfer_struct->id, peek(&my_priority_queue)->pid, replies);
                 break;
             case DONE:
-                printf("process %d received done from %d\n", transfer_struct->id, last_sender_id);
                 received_done++;
                 break;
         }
@@ -192,11 +196,8 @@ int release_cs(const void* void_transfer_struct) {
     declaration->s_header.s_local_time = get_lamport_time();
     declaration->s_header.s_payload_len = 0;
     int result = send_multicast(transfer_struct, declaration);
-    if (result < 0) {
-        printf("AAAAA\n");
-        return ERROR;
-    }
-    printf("%d send RELEASE\n", transfer_struct->id);
+    if (result < 0) return ERROR;
+    //printf("%d send RELEASE\n", transfer_struct->id);
     free(declaration);
     return SUCCESS;
 }
@@ -223,13 +224,10 @@ int wait_for_messages_from_everybody(void *void_dest, MessageType supposed_type)
                         calc_timestamp(answer->s_header.s_local_time, my_current_timestamp);
                         break;
                     } else break;
-                case EMPTY:
-                    sleep(1);
-                    break;
-                case EMPTY_EOF:
-                    break;
-                default:
+                case ERROR:
                     return ERROR;
+                default:
+                    break;
             }
         }
     }
