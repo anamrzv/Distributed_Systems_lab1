@@ -10,15 +10,13 @@ add_compile_options(
         -Wall)
 
 add_executable(Distributed_Systems_lab1
-        pa4/common.h
-        pa4/ipc.h
-        pa4/pa2345.h
-        pa4/process.h
-        pa4/ipc.c
-        pa4/main.c
-        pa4/process.c
-        pa4/priority_queue.c
-        pa4/priority_queue.h)
+        pa5/common.h
+        pa5/ipc.h
+        pa5/pa2345.h
+        pa5/process.h
+        pa5/ipc.c
+        pa5/main.c
+        pa5/process.c)
 
 add_library(runtime SHARED IMPORTED)
 
